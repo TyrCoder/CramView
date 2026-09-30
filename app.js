@@ -42,14 +42,21 @@ const MAX_LIVES = 3;
    Everything is kept in memory in `data` and written through on every change.
    ===================================================================== */
 const STORES = ['reviewers', 'questions', 'flashcards', 'attempts'];
+const ALL_STORES = [...STORES, 'tombstones'];
 const data = { reviewers: [], questions: [], flashcards: [], attempts: [] };
+let tombs = [];          // deletions not yet synced: { id: 'store:id', store, rid, updatedAt }
+let known = new Set();   // 'store:id' keys present at the last write (used to spot bulk deletions)
 let idb = null;
 let useLocalStorage = false;
+const keyOf = (store, id) => `${store}:${id}`;
 
 function openDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open('cramview', 1);
-    req.onupgradeneeded = () => STORES.forEach((s) => req.result.createObjectStore(s, { keyPath: 'id' }));
+    const req = indexedDB.open('cramview', 2);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      ALL_STORES.forEach((s) => { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: 'id' }); });
+    };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
@@ -61,7 +68,7 @@ const idbAll = (store) => new Promise((resolve, reject) => {
 });
 function idbTx(fn) {
   return new Promise((resolve, reject) => {
-    const tx = idb.transaction(STORES, 'readwrite');
+    const tx = idb.transaction(ALL_STORES, 'readwrite');
     fn(tx);
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
@@ -73,14 +80,26 @@ async function loadAll() {
     // If IndexedDB never answers (some private/locked-down browsers), don't hang on the loading screen
     idb = await Promise.race([openDB(), new Promise((_, rej) => setTimeout(() => rej(new Error('IndexedDB timed out')), 5000))]);
     for (const s of STORES) data[s] = await idbAll(s);
+    tombs = await idbAll('tombstones');
   } catch (err) {
     console.warn('IndexedDB unavailable, using localStorage', err);
     useLocalStorage = true;
     try {
       const saved = JSON.parse(localStorage.getItem('cramview-data') || '{}');
       STORES.forEach((s) => (data[s] = Array.isArray(saved[s]) ? saved[s] : []));
+      tombs = Array.isArray(saved.tombstones) ? saved.tombstones : [];
     } catch { /* start empty */ }
   }
+  // Records saved before sync existed have no edit time — give them one from their creation date
+  let stamped = false;
+  STORES.forEach((s) => data[s].forEach((o) => {
+    if (o.updatedAt) return;
+    const c = o.created ?? o.date;
+    o.updatedAt = (typeof c === 'number' ? c : Date.parse(c)) || Date.now();
+    stamped = true;
+  }));
+  known = new Set(STORES.flatMap((s) => data[s].map((o) => keyOf(s, o.id))));
+  if (stamped) persistAll();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 }
 function writeFailed(err) {
@@ -88,29 +107,69 @@ function writeFailed(err) {
   toast('⚠️ Could not save. Storage may be full or blocked.');
 }
 function persistLS() {
-  try { localStorage.setItem('cramview-data', JSON.stringify(data)); } catch (e) { writeFailed(e); }
+  try { localStorage.setItem('cramview-data', JSON.stringify({ ...data, tombstones: tombs })); } catch (e) { writeFailed(e); }
 }
-/** Insert or update one record. */
-function save(store, obj) {
+/** Write one record locally without touching its edit time (also used for records pulled from the cloud). */
+function putLocal(store, obj) {
   const i = data[store].findIndex((x) => x.id === obj.id);
   if (i >= 0) data[store][i] = obj; else data[store].push(obj);
+  known.add(keyOf(store, obj.id));
   if (useLocalStorage) return persistLS();
   idbTx((tx) => tx.objectStore(store).put(obj)).catch(writeFailed);
 }
-/** Delete one record. */
-function del(store, id) {
+/** Remove one record locally without leaving a tombstone (used when the cloud says it was deleted). */
+function removeLocal(store, id) {
   data[store] = data[store].filter((x) => x.id !== id);
+  known.delete(keyOf(store, id));
   if (useLocalStorage) return persistLS();
   idbTx((tx) => tx.objectStore(store).delete(id)).catch(writeFailed);
 }
-/** Rewrite the whole database from memory (used for bulk changes). */
-function persistAll() {
+function dropTomb(key) {
+  if (!tombs.some((t) => t.id === key)) return;
+  tombs = tombs.filter((t) => t.id !== key);
   if (useLocalStorage) return persistLS();
-  return idbTx((tx) => STORES.forEach((s) => {
-    const os = tx.objectStore(s);
-    os.clear();
-    data[s].forEach((o) => os.put(o));
-  })).catch(writeFailed);
+  idbTx((tx) => tx.objectStore('tombstones').delete(key)).catch(writeFailed);
+}
+/** Insert or update one record (the user changed it, so it will sync). */
+function save(store, obj) {
+  obj.updatedAt = Date.now();
+  dropTomb(keyOf(store, obj.id));
+  putLocal(store, obj);
+  scheduleSync();
+}
+/** Delete one record. */
+function del(store, id) {
+  const t = { id: keyOf(store, id), store, rid: id, updatedAt: Date.now() };
+  data[store] = data[store].filter((x) => x.id !== id);
+  known.delete(t.id);
+  tombs = tombs.filter((x) => x.id !== t.id).concat(t);
+  if (useLocalStorage) persistLS();
+  else idbTx((tx) => { tx.objectStore(store).delete(id); tx.objectStore('tombstones').put(t); }).catch(writeFailed);
+  scheduleSync();
+}
+/** Rewrite the whole database from memory (used for bulk changes). Anything that disappeared becomes a tombstone. */
+function persistAll() {
+  const current = new Set(STORES.flatMap((s) => data[s].map((o) => keyOf(s, o.id))));
+  const t0 = Date.now();
+  known.forEach((k) => {
+    if (current.has(k) || tombs.some((t) => t.id === k)) return;
+    const i = k.indexOf(':');
+    tombs.push({ id: k, store: k.slice(0, i), rid: k.slice(i + 1), updatedAt: t0 });
+  });
+  tombs = tombs.filter((t) => !current.has(t.id));
+  known = current;
+  scheduleSync();
+  if (useLocalStorage) return persistLS();
+  return idbTx((tx) => {
+    STORES.forEach((s) => {
+      const os = tx.objectStore(s);
+      os.clear();
+      data[s].forEach((o) => os.put(o));
+    });
+    const ts = tx.objectStore('tombstones');
+    ts.clear();
+    tombs.forEach((t) => ts.put(t));
+  }).catch(writeFailed);
 }
 
 /* Data accessors */
@@ -273,7 +332,7 @@ function homeList(query) {
   return list.map(reviewerCard).join('');
 }
 function viewHome() {
-  render(`${topbar('📚 Cramview', '', `<button class="btn ghost icon" data-act="nav" data-to="/data" aria-label="Backup and settings">💾</button>`)}
+  render(`${topbar('📚 Cramview', '', `<button class="btn ghost icon" data-act="nav" data-to="/data" aria-label="Sync and backup">☁️</button>`)}
     <main class="container stack">
       ${data.reviewers.length ? `<input type="search" id="search" placeholder="Search reviewers…" autocomplete="off">` : ''}
       <div id="home-list" class="stack">${homeList('')}</div>
@@ -916,11 +975,12 @@ function bindSwipe() {
    BACKUP: export / import
    ===================================================================== */
 function viewData() {
-  render(`${topbar('Backup & data', '/')}
+  render(`${topbar('Sync & backup', '/')}
     <main class="container stack">
+      ${syncCard()}
       <div class="card stack">
-        <div class="card-title">Move data between devices</div>
-        <p class="muted small">Your data is saved only on this device. Export a file here, send it to your other device (AirDrop, email, Files, cloud drive), then import it there.</p>
+        <div class="card-title">Backup file</div>
+        <p class="muted small">Without cloud sync, your data is saved only on this device. Export a file, send it to another device (AirDrop, email, Files), then import it there.</p>
         <button class="btn primary block" data-act="export">⬇️ Export all data</button>
         <button class="btn block" data-act="import">⬆️ Import from file</button>
         <input type="file" id="import-file" accept="application/json,.json" class="hidden">
@@ -963,11 +1023,12 @@ async function importFile(file) {
   let incoming;
   try { incoming = parseImport(await file.text()); }
   catch { return toast('That file is not a valid Cramview backup.'); }
+  STORES.forEach((s) => incoming[s].forEach((o) => { o.updatedAt = Date.now(); }));
   const m = openModal(`<h2>Import backup</h2>
     <p class="muted">Found ${plural(incoming.reviewers.length, 'reviewer')}, ${plural(incoming.questions.length, 'question')}, ${plural(incoming.flashcards.length, 'flashcard')}, ${plural(incoming.attempts.length, 'attempt')}.</p>
     <div class="stack" style="margin-top:16px">
       <button class="btn primary block" data-x="merge">Merge with my current data</button>
-      <button class="btn danger block" data-x="replace">Replace everything on this device</button>
+      <button class="btn danger block" data-x="replace">Replace everything${auth ? ' (and in the cloud)' : ' on this device'}</button>
       <button class="btn block" data-x="cancel">Cancel</button>
     </div>
     <p class="small muted" style="margin-top:10px">Merge keeps what you have and adds the file's items (same items are overwritten by the file's version).</p>`);
@@ -1156,11 +1217,17 @@ const ACTIONS = {
   },
   'study-restart': () => { study.deck = buildDeck(study.rid); study.i = 0; renderStudy(); },
 
+  /* account + sync */
+  'sign-in': () => doAuth(false),
+  'sign-up': () => doAuth(true),
+  'sign-out': () => { clearSession(); clearTimeout(sync.timer); toast('Signed out'); viewData(); },
+  'sync-now': () => runSync(true),
+
   /* backup */
   export: () => exportData(),
   import: () => $('#import-file').click(),
   wipe: async () => {
-    if (!await confirmBox({ title: 'Delete ALL data?', message: 'Every reviewer, question, flashcard and result on this device will be erased. Export a backup first if unsure.', okText: 'Delete everything' })) return;
+    if (!await confirmBox({ title: 'Delete ALL data?', message: `Every reviewer, question, flashcard and result on this device will be erased${auth ? ', and deleted from your cloud account and other devices too' : ''}. Export a backup first if unsure.`, okText: 'Delete everything' })) return;
     STORES.forEach((s) => (data[s] = []));
     persistAll();
     toast('All data deleted');
@@ -1187,6 +1254,7 @@ document.addEventListener('change', (e) => {
 document.addEventListener('keydown', (e) => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
   if (e.key === 'Escape') return closeModal();
+  if (e.key === 'Enter' && e.target.id === 'a-pass') { e.preventDefault(); return ACTIONS['sign-in'](); }
   if (e.key === 'Enter' && e.target.id === 'id-input') { e.preventDefault(); return ACTIONS['submit-id'](); }
   if (study && !typing && !$('#modal-root .modal') && study.i < study.deck.length) {
     if (e.key === 'ArrowRight') gotoCard(study.i + 1, 1);
@@ -1195,6 +1263,234 @@ document.addEventListener('keydown', (e) => {
   }
 });
 window.addEventListener('hashchange', () => { closeModal(); route(); });
+
+/* =====================================================================
+   CLOUD SYNC — Supabase (plain fetch, no SDK, works alongside the offline cache)
+   Local IndexedDB stays the source the app reads from. Sync = pull newer rows, then push local changes.
+   Conflicts: the most recently edited copy of a record wins. Needs supabase/schema.sql and config.js.
+   ===================================================================== */
+const CFG = window.CRAMVIEW_CONFIG || {};
+const SB_URL = String(CFG.supabaseUrl || '').replace(/\/$/, '');
+const syncConfigured = /^https:\/\//.test(SB_URL) && !!CFG.supabaseAnonKey;
+const lsGet = (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
+const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } };
+
+let auth = lsGet('cramview-session');   // { access_token, refresh_token, expires_at, user: { id, email } }
+let syncMeta = lsGet('cramview-sync') || { pull: null, push: 0, user: null, last: null };
+const saveMeta = () => lsSet('cramview-sync', syncMeta);
+const sync = { running: false, again: false, timer: null, error: '' };
+const pulledAt = new Map(); // 'store:id' -> edit time of the copy we just received, so we don't send it straight back
+
+/** Call the Supabase REST API. */
+async function sb(path, { method = 'GET', body, headers = {}, authed = true } = {}) {
+  const h = { apikey: CFG.supabaseAnonKey, 'Content-Type': 'application/json', ...headers };
+  if (authed) { await ensureToken(); h.Authorization = `Bearer ${auth.access_token}`; }
+  const res = await fetch(SB_URL + path, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) });
+  if (!res.ok) {
+    let msg = '';
+    try { const j = await res.json(); msg = j.msg || j.message || j.error_description || j.error || ''; } catch { /* no body */ }
+    const err = new Error(msg || `Request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.status === 204 ? null : res.json().catch(() => null);
+}
+function setSession(j) {
+  auth = {
+    access_token: j.access_token, refresh_token: j.refresh_token,
+    expires_at: j.expires_at || Math.floor(Date.now() / 1000) + (j.expires_in || 3600),
+    user: { id: j.user.id, email: j.user.email },
+  };
+  lsSet('cramview-session', auth);
+}
+function clearSession() { auth = null; lsSet('cramview-session', null); }
+async function ensureToken() {
+  if (!auth) throw new Error('Not signed in.');
+  if (auth.expires_at * 1000 - Date.now() > 60000) return;
+  try {
+    setSession(await sb('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: { refresh_token: auth.refresh_token }, authed: false }));
+  } catch (e) {
+    if (e.status >= 400 && e.status < 500) { clearSession(); throw new Error('Session expired. Please sign in again.'); }
+    throw e;
+  }
+}
+
+async function signIn(email, password) {
+  setSession(await sb('/auth/v1/token?grant_type=password', { method: 'POST', body: { email, password }, authed: false }));
+}
+/** Returns 'confirm' when Supabase wants the email confirmed before the first sign-in. */
+async function signUp(email, password) {
+  const j = await sb('/auth/v1/signup', { method: 'POST', body: { email, password }, authed: false });
+  if (j && j.access_token) { setSession(j); return 'ok'; }
+  return 'confirm';
+}
+/** After signing in: stop one person's data from silently landing in another account. */
+async function afterLogin() {
+  const hasLocal = STORES.some((s) => data[s].length);
+  if (syncMeta.user && syncMeta.user !== auth.user.id && hasLocal) {
+    const ok = await confirmBox({
+      title: 'Different account',
+      message: 'This device has data from another account. Add it to this account too? Cancel signs you out and keeps it separate.',
+      okText: 'Add it', danger: false,
+    });
+    if (!ok) { clearSession(); return false; }
+  }
+  if (syncMeta.user !== auth.user.id) syncMeta = { pull: null, push: 0, user: auth.user.id, last: null };
+  saveMeta();
+  return true;
+}
+
+/** Apply one row from the cloud. Returns true if local data changed. */
+function applyRemote(row) {
+  if (!STORES.includes(row.store)) return false;
+  const key = keyOf(row.store, row.id);
+  const local = data[row.store].find((x) => x.id === row.id);
+  const ts = Date.parse(row.updated_at);
+  if (row.deleted) {
+    if (!local || (local.updatedAt || 0) > ts) return false; // edited here after it was deleted elsewhere: keep it
+    removeLocal(row.store, row.id);
+    return true;
+  }
+  if (!row.data) return false;
+  if (local && (local.updatedAt || 0) >= ts) return false;
+  const tomb = tombs.find((t) => t.id === key);
+  if (tomb && tomb.updatedAt >= ts) return false;           // deleted here after the cloud copy was edited
+  dropTomb(key);
+  putLocal(row.store, { ...row.data, updatedAt: ts });
+  pulledAt.set(key, ts);
+  return true;
+}
+async function pullRemote() {
+  const PAGE = 1000;
+  let changed = false;
+  let newest = syncMeta.pull;
+  const since = syncMeta.pull ? `&synced_at=gt.${encodeURIComponent(syncMeta.pull)}` : '';
+  for (let offset = 0; ; offset += PAGE) {
+    const rows = await sb(`/rest/v1/records?select=store,id,data,deleted,updated_at,synced_at&order=synced_at.asc,store.asc,id.asc&limit=${PAGE}&offset=${offset}${since}`);
+    for (const row of rows || []) {
+      if (applyRemote(row)) changed = true;
+      if (!newest || row.synced_at > newest) newest = row.synced_at;
+    }
+    if (!rows || rows.length < PAGE) break;
+  }
+  syncMeta.pull = newest;
+  saveMeta();
+  return changed;
+}
+async function pushLocal() {
+  const started = Date.now();
+  const uid = auth.user.id;
+  const rows = [];
+  STORES.forEach((s) => data[s].forEach((o) => {
+    if ((o.updatedAt || 0) >= syncMeta.push && pulledAt.get(keyOf(s, o.id)) !== o.updatedAt) rows.push({ user_id: uid, store: s, id: o.id, data: o, deleted: false, updated_at: new Date(o.updatedAt).toISOString() });
+  }));
+  const sentTombs = tombs.slice();
+  sentTombs.forEach((t) => rows.push({ user_id: uid, store: t.store, id: t.rid, data: null, deleted: true, updated_at: new Date(t.updatedAt).toISOString() }));
+  for (let i = 0; i < rows.length; i += 200) {
+    await sb('/rest/v1/records?on_conflict=user_id,store,id', {
+      method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: rows.slice(i, i + 200),
+    });
+  }
+  if (sentTombs.length) {
+    const sent = new Set(sentTombs.map((t) => `${t.id}@${t.updatedAt}`));
+    const gone = tombs.filter((t) => sent.has(`${t.id}@${t.updatedAt}`));
+    tombs = tombs.filter((t) => !sent.has(`${t.id}@${t.updatedAt}`));
+    if (useLocalStorage) persistLS();
+    else idbTx((tx) => gone.forEach((t) => tx.objectStore('tombstones').delete(t.id))).catch(writeFailed);
+  }
+  pulledAt.clear();
+  syncMeta.push = started;
+  saveMeta();
+}
+
+async function runSync(manual) {
+  if (!syncConfigured || !auth) return;
+  if (sync.running) { sync.again = true; return; }
+  if (!navigator.onLine) { if (manual) toast('You are offline.'); return; }
+  sync.running = true;
+  sync.error = '';
+  updateSyncUI();
+  let changed = false;
+  try {
+    changed = await pullRemote();
+    await pushLocal();
+    syncMeta.last = Date.now();
+    saveMeta();
+    if (manual) toast('Synced ✓');
+  } catch (e) {
+    sync.error = e.message || 'Sync failed';
+    if (manual) toast(`Sync failed: ${sync.error}`);
+  }
+  sync.running = false;
+  updateSyncUI();
+  if (changed) refreshAfterSync();
+  if (sync.again) { sync.again = false; scheduleSync(500); }
+}
+function scheduleSync(delay = 2500) {
+  if (!syncConfigured || !auth) return;
+  clearTimeout(sync.timer);
+  sync.timer = setTimeout(() => runSync(false), delay);
+}
+/** Redraw after new data arrived, unless that would interrupt the user. */
+function refreshAfterSync() {
+  if (session || study || $('#modal-root .modal') || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return;
+  route();
+}
+function syncStatusText() {
+  if (sync.running) return 'Syncing…';
+  if (sync.error) return `⚠️ ${esc(sync.error)}`;
+  return syncMeta.last ? `Last synced ${esc(fmtDate(new Date(syncMeta.last).toISOString()))}` : 'Not synced yet';
+}
+function updateSyncUI() {
+  const el = $('#sync-status');
+  if (el) el.innerHTML = syncStatusText();
+}
+function syncCard() {
+  if (!syncConfigured) {
+    return `<div class="card stack"><div class="card-title">☁️ Cloud sync</div>
+      <p class="muted small">Cloud sync isn’t set up yet. Add your Supabase project URL and anon key to <b>config.js</b> (see README), then reload.</p></div>`;
+  }
+  if (auth) {
+    return `<div class="card stack"><div class="card-title">☁️ Cloud sync</div>
+      <p class="small">Signed in as <b>${esc(auth.user.email)}</b></p>
+      <p class="muted small" id="sync-status">${syncStatusText()}</p>
+      <div class="btn-grid"><button class="btn primary" data-act="sync-now">Sync now</button>
+      <button class="btn" data-act="sign-out">Sign out</button></div>
+      <p class="muted small">Changes sync automatically when you’re online. Sign out keeps the data on this device.</p></div>`;
+  }
+  return `<div class="card stack"><div class="card-title">☁️ Cloud sync</div>
+    <p class="muted small">Sign in to keep your reviewers in sync between your PC and iPhone. The app still works offline.</p>
+    <label class="field"><span class="label">Email</span><input type="email" id="a-email" autocomplete="email" autocapitalize="none" inputmode="email"></label>
+    <label class="field"><span class="label">Password (6+ characters)</span><input type="password" id="a-pass" autocomplete="current-password"></label>
+    <div class="btn-grid"><button class="btn primary" data-act="sign-in">Sign in</button>
+    <button class="btn" data-act="sign-up">Create account</button></div></div>`;
+}
+
+async function doAuth(create) {
+  const email = $('#a-email').value.trim();
+  const password = $('#a-pass').value;
+  if (!/^\S+@\S+\.\S+$/.test(email)) return toast('Enter a valid email.');
+  if (password.length < 6) return toast('Password must be at least 6 characters.');
+  const buttons = $$('[data-act="sign-in"], [data-act="sign-up"]');
+  buttons.forEach((b) => (b.disabled = true));
+  try {
+    if (create) {
+      if (await signUp(email, password) === 'confirm') {
+        buttons.forEach((b) => (b.disabled = false));
+        return toast('Check your email to confirm, then sign in.');
+      }
+    } else {
+      await signIn(email, password);
+    }
+    if (!await afterLogin()) return viewData();
+    toast('Signed in ✓');
+    viewData();
+    runSync(true);
+  } catch (e) {
+    buttons.forEach((b) => (b.disabled = false));
+    toast(e.message || 'Could not sign in.');
+  }
+}
 
 /* =====================================================================
    BOOT + SERVICE WORKER
@@ -1228,4 +1524,8 @@ function registerSW() {
   await loadAll();
   route();
   registerSW();
+  runSync(false);
+  window.addEventListener('online', () => runSync(false));
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') runSync(false); });
+  setInterval(() => { if (document.visibilityState === 'visible') runSync(false); }, 120000);
 })();

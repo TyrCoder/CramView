@@ -144,7 +144,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .field { display: block; }
 .field + .field { margin-top: 14px; }
 .field > span.label { display: block; font-weight: 650; font-size: .9rem; margin-bottom: 6px; }
-input[type=text], input[type=search], input[type=number], select, textarea {
+input[type=text], input[type=search], input[type=number], input[type=email], input[type=password], select, textarea {
   width: 100%; min-height: 48px; padding: 10px 14px;
   background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--radius-sm);
   outline: none; font-size: 16px; /* 16px stops iOS zooming in on focus */
