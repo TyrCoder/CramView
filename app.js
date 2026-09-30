@@ -1713,7 +1713,7 @@ async function extractToNotes(fileId) {
      2) your signed-in Cramview account, through the Supabase function "generate-quiz" (the key stays on the server).
    If neither is set up, or the AI fails, the offline generator below is used instead.
    ===================================================================== */
-const AI_DEFAULT_MODEL = 'qwen/qwen3-32b';
+const AI_DEFAULT_MODEL = 'qwen/qwen3.8-27b';
 let aiCfg = {}; // { key, model } — never synced or exported
 try { aiCfg = JSON.parse(localStorage.getItem('cramview-ai') || '{}') || {}; } catch { aiCfg = {}; }
 const saveAiCfg = () => {
@@ -1855,6 +1855,7 @@ async function groqChat(messages, { json, temperature, maxTokens }) {
   } catch (e) { throw aiNetworkError(e); }
   if (res.status === 401) throw aiError('Groq rejected your API key. Check it in Sync & backup.', 401);
   if (res.status === 429) throw aiError('Groq is busy, or your limit was reached. Try again in a minute.', 429, Number(res.headers.get('retry-after')) || undefined);
+  if (res.status === 404) throw aiError(`Groq doesn’t offer the model “${model}” to your account. Type a current Groq model name in the Model box (Sync & backup).`, 404);
   if (!res.ok) {
     let detail = '';
     try { detail = (await res.json())?.error?.message || ''; } catch { /* no body */ }

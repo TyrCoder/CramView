@@ -14,7 +14,7 @@ const CORS = {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 
-const DEFAULT_MODEL = 'qwen/qwen3-32b';
+const DEFAULT_MODEL = 'qwen/qwen3.8-27b';
 const TYPES = ['mc', 'tf', 'id', 'enum'];
 const MAX_TEXT = 15000;
 const MAX_COUNT = 20;
@@ -196,6 +196,7 @@ Deno.serve(async (req: Request) => {
     const retryAfter = Number(res.headers.get('retry-after')) || undefined;
     return json({ error: 'The AI is busy right now. Try again in a minute.', retryAfter }, 429);
   }
+  if (res.status === 404) return json({ error: 'Groq doesn’t offer the configured model. Set the GROQ_MODEL secret to a current Groq model name.' }, 502);
   if (!res.ok) return json({ error: `The AI service returned an error (${res.status}).` }, 502);
 
   let content = '';
