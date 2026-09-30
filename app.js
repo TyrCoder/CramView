@@ -584,7 +584,8 @@ function reviewerForm(r) {
     <div id="rf-files" class="stack"></div>
     <button type="button" class="btn block" style="margin-top:10px" data-act="rf-pick">${icon('plus')}Add files (PDF, PowerPoint, Word…)</button>
     <input type="file" id="rf-input" multiple class="hidden">
-    <div class="card" style="padding:4px 16px;margin-top:12px">${toggleRow('rf-scan', 'Scan files for lessons &amp; notes', 'Text from PDF, Word, PowerPoint and text files is added to the notes', true)}</div>
+    <div class="card" style="padding:4px 16px;margin-top:12px">${toggleRow('rf-scan', 'Scan files for lessons &amp; notes', 'Text from PDF, Word, PowerPoint and text files is added to the notes', true)}
+      ${toggleRow('rf-ai', `${icon('sparkles')}Clean up with AI`, aiMethod() ? 'Keeps only the lessons: removes the subject name, headers, page numbers and cover pages' : 'Add your Groq key in Sync &amp; backup (or sign in) to turn this on', !!aiMethod()).replace('<input type="checkbox"', aiMethod() ? '<input type="checkbox"' : '<input type="checkbox" disabled')}</div>
     <label class="field" style="margin-top:14px"><span class="label">Notes / lessons</span><textarea id="f-notes" style="min-height:200px" placeholder="Type or paste your lessons here. Text found in your files is added after it.">${esc(r?.notes || '')}</textarea></label>
     <div class="row" style="margin-top:18px">
       <button class="btn grow" data-act="close-modal">Cancel</button>
@@ -773,11 +774,13 @@ function viewExamSetup(r) {
     </main>`);
 }
 
-/** All readable text for a reviewer: its notes plus attached .docx/.pptx/.txt/.md files. */
+/** Files whose lessons are already in the notes (so they shouldn't be read a second time). */
+const covered = (r, name) => (r.scanned || []).includes(name) || (r.notes || '').includes(`— ${name} —`);
+/** All readable text for a reviewer: its notes plus attached PDF/.docx/.pptx/.txt/.md files not already scanned into the notes. */
 async function sourceTextOf(r) {
   const parts = [r.notes || ''];
-  for (const f of (await filesOf(r.id)).filter((x) => SCAN_RE.test(x.name))) {
-    try { parts.push(await extractText(f)); } catch { /* skip unreadable file */ }
+  for (const f of (await filesOf(r.id)).filter((x) => SCAN_RE.test(x.name) && !covered(r, x.name))) {
+    try { parts.push(tidyLessonText(await extractText(f), { title: r.title, subject: r.subject, file: f.name })); } catch { /* skip unreadable file */ }
   }
   return parts.join('\n');
 }
@@ -1542,23 +1545,100 @@ async function extractPdfText(blob) {
   } finally { pdf.destroy(); }
   return tidyPdfPages(pages);
 }
-/** Read the text of several File objects into one block for the notes. */
-async function scanFilesToNotes(files, onProgress) {
+/* ---------- Turning files into lesson notes ---------- */
+/** Offline cleanup: drop lines that are just the reviewer title, subject or file name, plus bare labels like "Lesson 1 of 5". */
+function tidyLessonText(text, meta = {}) {
+  const metas = [meta.title, meta.subject, String(meta.file || '').replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ')]
+    .map((m) => normKey(m || '')).filter((m) => m.length >= 4);
+  return String(text).split('\n').filter((line) => {
+    const l = normKey(line);
+    if (!l) return true;
+    if (/^(reviewer|review|lesson \d+( of \d+)?|module \d+)$/.test(l)) return false;
+    return !metas.some((m) => l === m || (l.includes(m) && l.length <= m.length * 1.5) || (m.includes(l) && l.length >= 6 && l.length >= m.length * 0.8));
+  }).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+/** Cut long text into pieces (on paragraph/line boundaries) that fit one AI request. */
+function splitChunks(text, max) {
+  const blocks = [];
+  String(text).split(/\n\s*\n/).forEach((para) => {
+    if (para.length <= max) { blocks.push(para); return; }
+    let cur = '';
+    para.split('\n').forEach((line) => {
+      if (cur && cur.length + line.length + 1 > max) { blocks.push(cur); cur = ''; }
+      cur += (cur ? '\n' : '') + line.slice(0, max);
+    });
+    if (cur) blocks.push(cur);
+  });
+  const out = [];
+  let cur = '';
+  blocks.forEach((b) => {
+    if (cur && cur.length + b.length + 2 > max) { out.push(cur); cur = ''; }
+    cur += (cur ? '\n\n' : '') + b;
+  });
+  if (cur.trim()) out.push(cur);
+  return out;
+}
+const AI_NOTES_CHUNK = 6000;
+const AI_NOTES_MAX_PARTS = 25;
+/** Have the AI keep only the lessons. Returns { text, aiParts, total }. Throws if the very first part fails (caller falls back). */
+async function aiLessons(text, meta, onProgress) {
+  const chunks = splitChunks(text, AI_NOTES_CHUNK);
+  const used = chunks.slice(0, AI_NOTES_MAX_PARTS);
+  const out = [];
+  let aiParts = 0;
+  let fallbacks = 0;
+  for (let i = 0; i < used.length; i++) {
+    if (onProgress) onProgress(i + 1, used.length, '');
+    try {
+      const res = await aiRetry(
+        () => callAi({ mode: 'notes', text: used[i], title: meta.title, subject: meta.subject, part: i + 1, parts: used.length }),
+        (s) => onProgress && onProgress(i + 1, used.length, `waiting ${s}s for the AI limit`),
+      );
+      aiParts++;
+      if (res.notes) out.push(res.notes); // an empty reply means this part had no lessons (cover page, contents...)
+    } catch (e) {
+      if (!aiParts && i === 0) throw e;
+      fallbacks++;
+      out.push(tidyLessonText(used[i], meta)); // keep going: use the tidied original for this part
+    }
+  }
+  chunks.slice(AI_NOTES_MAX_PARTS).forEach((c) => out.push(tidyLessonText(c, meta)));
+  return { text: out.filter(Boolean).join('\n\n'), aiParts, total: used.length, fallbacks };
+}
+/** Read the text of several File objects into lesson notes. Options: { title, subject, ai }. Returns { text, aiUsed, names }. */
+async function scanFilesToNotes(files, onProgress, { title = '', subject = '', ai = false } = {}) {
   const scannable = files.filter((f) => SCAN_RE.test(f.name));
   const skipped = files.filter((f) => !SCAN_RE.test(f.name)).map((f) => f.name);
   const parts = [];
+  const names = [];
   const failed = [];
+  let aiUsed = false;
+  let aiProblem = '';
   for (let i = 0; i < scannable.length; i++) {
-    if (onProgress) onProgress(i + 1, scannable.length);
-    try {
-      const t = await extractText({ name: scannable[i].name, blob: scannable[i] });
-      if (t) parts.push(`— ${scannable[i].name} —\n${t}`); else failed.push(scannable[i].name);
-    } catch (e) { failed.push(`${scannable[i].name} (${e.message.replace(/\.$/, '')})`); }
+    const f = scannable[i];
+    if (onProgress) onProgress(i + 1, scannable.length, '');
+    let raw;
+    try { raw = await extractText({ name: f.name, blob: f }); } catch (e) { failed.push(`${f.name} (${e.message.replace(/\.$/, '')})`); continue; }
+    let text = tidyLessonText(raw, { title, subject, file: f.name });
+    if (!text) { failed.push(f.name); continue; }
+    if (ai && aiMethod()) {
+      try {
+        const r = await aiLessons(text, { title, subject }, (p, n, d) => onProgress && onProgress(i + 1, scannable.length, `AI part ${p} of ${n}${d ? `, ${d}` : ''}`));
+        if (r.text) {
+          text = r.text;
+          aiUsed = true;
+          if (r.fallbacks) aiProblem = `${plural(r.fallbacks, 'part')} of ${f.name} could not be cleaned by the AI and kept as the tidied original.`;
+        } else aiProblem = `The AI found no lessons in ${f.name}. Kept the tidied original text instead.`;
+      } catch (e) { aiProblem = `${e.message} Kept the tidied original text instead.`; }
+    }
+    parts.push(text);
+    names.push(f.name);
   }
+  if (aiProblem) toast(aiProblem);
   if (failed.length || skipped.length) {
     toast(`Couldn’t read text from ${failed.concat(skipped).join(', ')}. Scanned pictures can’t be read, and old .doc/.ppt files need to be saved as .docx/.pptx first.`);
   }
-  return parts.join('\n\n');
+  return { text: parts.join('\n\n'), aiUsed, names };
 }
 
 async function extractText(rec) {
@@ -1586,12 +1666,25 @@ async function extractText(rec) {
 async function extractToNotes(fileId) {
   const rec = await getFile(fileId);
   if (!rec) return;
+  const r = getReviewer(rec.reviewerId);
+  const meta = { title: r?.title || '', subject: r?.subject || '', file: rec.name };
+  openModal(`<h2>Reading the file…</h2>
+    <p class="muted small" id="xn-status">${aiMethod() ? 'The AI is picking out the lessons. This can take a minute for long files.' : 'Reading the file…'}</p>`);
   let text;
-  try { text = await extractText(rec); } catch (e) { return toast(e.message || 'Could not read that file.'); }
-  if (!text) return toast('No text found in that file. (Scanned or image-only files can’t be read.)');
+  let ai = false;
+  try {
+    text = tidyLessonText(await extractText(rec), meta);
+    if (text && aiMethod()) {
+      try {
+        const res = await aiLessons(text, meta, (p, n, d) => { const el = $('#xn-status'); if (el) el.textContent = `AI is reading part ${p} of ${n}${d ? ` (${d})` : ''}…`; });
+        if (res.text) { text = res.text; ai = true; }
+      } catch (e) { toast(`${e.message} Used the tidied original text instead.`); }
+    }
+  } catch (e) { closeModal(); return toast(e.message || 'Could not read that file.'); }
+  if (!text) { closeModal(); return toast('No text found in that file. (Scanned or image-only files can’t be read.)'); }
   const preview = text.length > 400 ? `${text.slice(0, 400)}…` : text;
-  const m = openModal(`<h2>Add text to notes?</h2>
-    <p class="muted small">Found ${text.length.toLocaleString()} characters in “${esc(rec.name)}”. It will be added to the end of this reviewer’s notes.</p>
+  const m = openModal(`<h2>Add lessons to notes?</h2>
+    <p class="muted small">${ai ? 'The AI kept only the lessons. ' : ''}Found ${text.length.toLocaleString()} characters in “${esc(rec.name)}”. They will be added to the end of this reviewer’s notes.</p>
     <div class="card notes small" style="margin-top:12px;max-height:40dvh;overflow:auto">${esc(preview)}</div>
     <div class="row" style="margin-top:18px">
       <button class="btn grow" data-x="no">Cancel</button>
@@ -1602,11 +1695,12 @@ async function extractToNotes(fileId) {
     if (!x) return;
     closeModal();
     if (x.dataset.x !== 'yes') return;
-    const r = getReviewer(rec.reviewerId);
-    if (!r) return;
-    r.notes = `${r.notes ? `${r.notes}\n\n` : ''}— ${rec.name} —\n${text}`;
-    r.updated = now();
-    save('reviewers', r);
+    const rv = getReviewer(rec.reviewerId);
+    if (!rv) return;
+    rv.notes = `${rv.notes ? `${rv.notes}\n\n` : ''}${text}`;
+    rv.scanned = [...new Set([...(rv.scanned || []), rec.name])];
+    rv.updated = now();
+    save('reviewers', rv);
     toast('Added to notes');
     route();
   });
@@ -1619,7 +1713,7 @@ async function extractToNotes(fileId) {
      2) your signed-in Cramview account, through the Supabase function "generate-quiz" (the key stays on the server).
    If neither is set up, or the AI fails, the offline generator below is used instead.
    ===================================================================== */
-const AI_DEFAULT_MODEL = 'llama-3.3-70b-versatile';
+const AI_DEFAULT_MODEL = 'qwen/qwen3-32b';
 let aiCfg = {}; // { key, model } — never synced or exported
 try { aiCfg = JSON.parse(localStorage.getItem('cramview-ai') || '{}') || {}; } catch { aiCfg = {}; }
 const saveAiCfg = () => {
@@ -1705,36 +1799,81 @@ async function withTimeout(start, ms = 45000) {
 }
 const aiNetworkError = (e) => new Error(e.name === 'AbortError' ? 'The AI took too long to answer.' : 'Could not reach the AI. Check your connection.');
 
-/** Way 1: talk to Groq directly with the key saved on this device. */
-async function callGroq({ mode, text, count, types }) {
-  const user = mode === 'cards'
-    ? `Make ${count} flashcards from this study material.\n\nSTUDY MATERIAL:\n"""\n${text}\n"""`
-    : `Write ${count} questions using only these types: ${types.join(', ')}. Mix the types fairly evenly.\n\nSTUDY MATERIAL:\n"""\n${text}\n"""`;
+const AI_SYSTEM_N = `You turn raw text extracted from a student's file (PDF, slides or document) into clean lesson notes for studying. Reply with the notes only, as plain text. No introduction, no commentary and no markdown symbols (no #, *, ** or backticks).
+
+KEEP the lessons themselves: topics, explanations, definitions, key points, steps, lists, formulas, examples, dates and numbers, exactly as the source states them. Stay faithful and accurate: never add outside information, never guess, never change a fact. Fix broken line breaks and hyphenation and merge fragments into complete sentences.
+
+REMOVE everything that is not lesson content: the reviewer, course or subject title and course code, the school or institution, author, instructor or student names, document dates, labels such as "Reviewer" or "Lesson 1 of 5", cover pages, tables of contents, learning-objective boilerplate, instructions to students, headers, footers, page numbers, watermarks, file names, reference-only links and repeated text. Do not repeat the provided title or subject anywhere in the notes.
+
+FORMAT (plain text): each topic starts on its own short heading line (no bullet). Under it write the content as short lines: a definition as "Term: meaning", a list item as "• item", and an ordinary explanation as a complete sentence. Keep related items together under their heading and leave a blank line between topics. If the text has no lesson content at all, reply with exactly: NO_LESSON_CONTENT`;
+
+/** Qwen can put its reasoning in <think> tags; drop it. */
+const aiStripThink = (s) => String(s ?? '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/^[\s\S]*?<\/think>/i, '').trim();
+function aiParseJson(content) {
+  const s = aiStripThink(content);
+  const a = s.indexOf('{');
+  const b = s.lastIndexOf('}');
+  if (a < 0 || b <= a) throw new Error('The AI sent back something unreadable. Try again.');
+  try { return JSON.parse(s.slice(a, b + 1)); } catch { throw new Error('The AI sent back something unreadable. Try again.'); }
+}
+/** Plain-text notes: drop any markdown the model adds and normalise bullets. */
+function aiCleanNotes(s) {
+  const t = aiStripThink(s)
+    .replace(/```[a-z]*\n?/gi, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1')
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, '')
+    .replace(/^[ \t]*[-*+][ \t]+/gm, '• ')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return /^NO_LESSON_CONTENT\b/i.test(t) ? '' : t;
+}
+const aiNotesPrompt = ({ text, title, subject, part, parts }) =>
+  `Reviewer title: "${aiStr(title, 120)}"\nSubject: "${aiStr(subject, 80)}"\n${parts > 1 ? `This is part ${part} of ${parts} of the file.\n` : ''}\nRAW TEXT FROM THE FILE:\n"""\n${text}\n"""`;
+const aiError = (message, status, retryAfter) => Object.assign(new Error(message), { status, retryAfter });
+
+/** One chat request to Groq. Qwen3 "thinks" by default (slow, and it eats the rate limit), so ask it not to; retry without if the model rejects that. */
+async function groqChat(messages, { json, temperature, maxTokens }) {
+  const model = aiCfg.model || AI_DEFAULT_MODEL;
+  const build = (reasoning) => JSON.stringify({
+    model,
+    temperature,
+    max_tokens: maxTokens,
+    messages,
+    ...(json ? { response_format: { type: 'json_object' } } : {}),
+    ...(reasoning && /qwen/i.test(model) ? { reasoning_effort: 'none' } : {}),
+  });
+  const post = (body) => withTimeout((signal) => fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST', signal, headers: { Authorization: `Bearer ${aiCfg.key}`, 'Content-Type': 'application/json' }, body,
+  }), 60000);
   let res;
   try {
-    res = await withTimeout((signal) => fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      signal,
-      headers: { Authorization: `Bearer ${aiCfg.key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: aiCfg.model || AI_DEFAULT_MODEL,
-        temperature: 0.7,
-        max_tokens: 4000,
-        response_format: { type: 'json_object' },
-        messages: [{ role: 'system', content: mode === 'cards' ? AI_SYSTEM_C : AI_SYSTEM_Q }, { role: 'user', content: user }],
-      }),
-    }));
+    res = await post(build(true));
+    if (res.status === 400 && /reasoning/i.test(await res.clone().text())) res = await post(build(false));
   } catch (e) { throw aiNetworkError(e); }
-  if (res.status === 401) throw new Error('Groq rejected your API key. Check it in Sync & backup.');
-  if (res.status === 429) throw new Error('Groq is busy, or your limit was reached. Try again in a minute.');
+  if (res.status === 401) throw aiError('Groq rejected your API key. Check it in Sync & backup.', 401);
+  if (res.status === 429) throw aiError('Groq is busy, or your limit was reached. Try again in a minute.', 429, Number(res.headers.get('retry-after')) || undefined);
   if (!res.ok) {
     let detail = '';
     try { detail = (await res.json())?.error?.message || ''; } catch { /* no body */ }
-    throw new Error(`Groq returned an error (${res.status}). ${detail.slice(0, 120)}`.trim());
+    throw aiError(`Groq returned an error (${res.status}). ${detail.slice(0, 120)}`.trim(), res.status);
   }
-  let parsed;
-  try { parsed = JSON.parse((await res.json())?.choices?.[0]?.message?.content ?? '{}'); } catch { throw new Error('The AI sent back something unreadable. Try again.'); }
-  return aiShape(parsed, { mode, count, types });
+  try { return (await res.json())?.choices?.[0]?.message?.content ?? ''; } catch { throw new Error('The AI sent back something unreadable. Try again.'); }
+}
+/** Way 1: talk to Groq directly with the key saved on this device. */
+async function callGroq(payload) {
+  const { mode, text, count, types } = payload;
+  if (mode === 'notes') {
+    const content = await groqChat([{ role: 'system', content: AI_SYSTEM_N }, { role: 'user', content: aiNotesPrompt(payload) }], { json: false, temperature: 0.2, maxTokens: 4096 });
+    return { notes: aiCleanNotes(content) };
+  }
+  const user = mode === 'cards'
+    ? `Make ${count} flashcards from this study material.\n\nSTUDY MATERIAL:\n"""\n${text}\n"""`
+    : `Write ${count} questions using only these types: ${types.join(', ')}. Mix the types fairly evenly.\n\nSTUDY MATERIAL:\n"""\n${text}\n"""`;
+  const content = await groqChat([{ role: 'system', content: mode === 'cards' ? AI_SYSTEM_C : AI_SYSTEM_Q }, { role: 'user', content: user }], { json: true, temperature: 0.7, maxTokens: 4000 });
+  return aiShape(aiParseJson(content), payload);
 }
 /** Way 2: the Supabase function (the Groq key stays on the server). */
 async function callAiFunction(payload) {
@@ -1746,17 +1885,33 @@ async function callAiFunction(payload) {
       signal,
       headers: { 'Content-Type': 'application/json', apikey: CFG.supabaseAnonKey, Authorization: `Bearer ${auth.access_token}` },
       body: JSON.stringify(payload),
-    }));
+    }), 90000);
   } catch (e) { throw aiNetworkError(e); }
   let j = null;
   try { j = await res.json(); } catch { /* no body */ }
-  if (!res.ok) throw new Error((j && j.error) || (res.status === 404 ? 'The AI function isn’t deployed yet (see the README).' : `The AI request failed (${res.status}).`));
+  if (!res.ok) {
+    throw aiError((j && j.error) || (res.status === 404 ? 'The AI function isn’t deployed yet (see the README).' : `The AI request failed (${res.status}).`), res.status, j && j.retryAfter);
+  }
   return j || {};
 }
 async function callAi(payload) {
   const method = aiMethod();
   if (!method) throw new Error('AI isn’t set up. Add your Groq key or sign in (Sync & backup).');
-  return method === 'key' ? callGroq(payload) : aiShape(await callAiFunction(payload), payload);
+  if (method === 'key') return callGroq(payload);
+  const j = await callAiFunction(payload);
+  return payload.mode === 'notes' ? { notes: aiCleanNotes(j.notes || '') } : aiShape(j, payload);
+}
+/** Free AI plans have per-minute limits. For long jobs (scanning files) wait and try again instead of giving up. */
+const AI_RETRY = { tries: 3, maxWaitSec: 60 };
+async function aiRetry(fn, onWait) {
+  for (let i = 0; ; i++) {
+    try { return await fn(); } catch (e) {
+      if (e.status !== 429 || i >= AI_RETRY.tries - 1) throw e;
+      const wait = Math.min(e.retryAfter || 20, AI_RETRY.maxWaitSec);
+      if (onWait) onWait(wait);
+      await new Promise((r) => setTimeout(r, wait * 1000));
+    }
+  }
 }
 
 /** For long material, send a random stretch of it so each quiz covers different parts. */
@@ -1771,14 +1926,14 @@ function textWindow(text, max) {
   return text.slice(start, end);
 }
 const aiItem = (q) => ({ ...q, card: { front: q.text, back: correctText(q) + (q.explanation ? `\n\n${q.explanation}` : '') } });
-const AI_WINDOW = 9000;
+const AI_WINDOW = 6000;
 async function aiQuestions(text, { types, count }) {
   const out = [];
   const seen = new Set();
   for (let call = 0; call < 4 && out.length < count; call++) {
     let res;
     try {
-      res = await callAi({ mode: 'questions', text: textWindow(text, AI_WINDOW), count: Math.min(count - out.length, 15), types });
+      res = await callAi({ mode: 'questions', text: textWindow(text, AI_WINDOW), count: Math.min(count - out.length, 10), types });
     } catch (e) {
       if (!out.length) throw e;
       break; // keep what we already have
@@ -1796,7 +1951,7 @@ async function aiCards(text, count) {
   for (let call = 0; call < 4 && out.length < count; call++) {
     let res;
     try {
-      res = await callAi({ mode: 'cards', text: textWindow(text, AI_WINDOW), count: Math.min(count - out.length, 20) });
+      res = await callAi({ mode: 'cards', text: textWindow(text, AI_WINDOW), count: Math.min(count - out.length, 15) });
     } catch (e) {
       if (!out.length) throw e;
       break;
@@ -2023,7 +2178,8 @@ function generateCardItems(text, count) {
 /* ---------- UI ---------- */
 let gen = null; // { rid, mode: 'questions' | 'cards', files, items, keepCards }
 async function openGenerator(rid, mode) {
-  const files = (await filesOf(rid)).filter((f) => SCAN_RE.test(f.name));
+  const r0 = getReviewer(rid);
+  const files = (await filesOf(rid)).filter((f) => SCAN_RE.test(f.name) && !covered(r0, f.name));
   gen = { rid, mode, files, items: [], keepCards: true };
   renderGenSetup();
 }
@@ -2064,7 +2220,7 @@ async function genRun() {
   if ($('#g-notes', m)?.checked && (r.notes || '').trim()) parts.push(r.notes);
   for (let i = 0; i < gen.files.length; i++) {
     if (!$(`#g-file-${i}`, m)?.checked) continue;
-    try { parts.push(await extractText(gen.files[i])); } catch (e) { toast(`Skipped “${gen.files[i].name}”: ${e.message}`); }
+    try { parts.push(tidyLessonText(await extractText(gen.files[i]), { title: r.title, subject: r.subject, file: gen.files[i].name })); } catch (e) { toast(`Skipped “${gen.files[i].name}”: ${e.message}`); }
   }
   gen.text = parts.join('\n');
   if (gen.mode === 'questions') {
@@ -2202,23 +2358,32 @@ const ACTIONS = {
     const old = el.dataset.id ? getReviewer(el.dataset.id) : null;
     const typed = $('#f-notes').value.trim();
     const scan = !!$('#rf-scan')?.checked;
+    const useAi = scan && !!$('#rf-ai')?.checked;
     const files = rfFiles.slice();
-    const r = { id: old?.id || uid(), title, subject: $('#f-subject').value.trim(), notes: typed, created: old?.created || now(), updated: now() };
+    const r = {
+      id: old?.id || uid(), title, subject: $('#f-subject').value.trim(), notes: typed,
+      created: old?.created || now(), updated: now(), ...(old?.scanned ? { scanned: old.scanned } : {}),
+    };
     const label = el.innerHTML;
     el.disabled = true;
-    let scanned = false;
+    let scanned = '';
     try {
       save('reviewers', r);
       if (files.length) {
         el.innerHTML = `${icon('file')}Saving files…`;
         await addFiles(files, r.id);
         if (scan) {
-          const found = await scanFilesToNotes(files, (i, n) => { el.innerHTML = `${icon('sparkles')}Scanning ${i} of ${n}…`; });
-          if (found) {
-            r.notes = `${typed ? `${typed}\n\n` : ''}${found}`;
+          const found = await scanFilesToNotes(
+            files,
+            (i, n, d) => { el.innerHTML = `${icon('sparkles')}Scanning ${i} of ${n}${d ? ` · ${d}` : ''}…`; },
+            { title, subject: r.subject, ai: useAi },
+          );
+          if (found.text) {
+            r.notes = `${typed ? `${typed}\n\n` : ''}${found.text}`;
+            r.scanned = [...new Set([...(old?.scanned || []), ...found.names])];
             r.updated = now();
             save('reviewers', r);
-            scanned = true;
+            scanned = found.aiUsed ? 'ai' : 'plain';
           }
         }
       }
@@ -2229,7 +2394,7 @@ const ACTIONS = {
       return;
     }
     closeModal();
-    toast(scanned ? 'Saved. Lessons added from your files' : 'Saved');
+    toast(scanned === 'ai' ? 'Saved. AI wrote the lessons from your files' : scanned ? 'Saved. Lessons added from your files' : 'Saved');
     if (old) route(); else go(`/r/${r.id}`);
   },
   'delete-reviewer': async (el) => {

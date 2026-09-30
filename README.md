@@ -71,10 +71,12 @@ There are two ways to connect it. The app uses your own key first if you saved o
 
 **B. Through your account (the key stays on the server).** This works on every device once you are signed in.
 1. Supabase dashboard > **Edge Functions** > **Deploy a new function** > **Via Editor**. Name it exactly `generate-quiz`, paste the contents of `supabase/functions/generate-quiz/index.ts`, and deploy. (With the CLI: `supabase functions deploy generate-quiz --project-ref YOUR_REF`.)
-2. **Project Settings > Edge Functions > Secrets**: add `GROQ_API_KEY` with your Groq key. Optional: `GROQ_MODEL` to change the model (default `llama-3.3-70b-versatile`; if Groq retires it, set a current one here or in the app's Model box).
+2. **Project Settings > Edge Functions > Secrets**: add `GROQ_API_KEY` with your Groq key. Optional: `GROQ_MODEL` to change the model (default `qwen/qwen3-32b`; if Groq retires it, set a current one here or in the app's Model box).
 3. Sign in in the app. The AI card then says it is using your account. Only signed-in users can call the function, so nobody else can spend your Groq quota.
 
 Groq's free tier has rate limits, so very large quizzes may occasionally fall back to offline.
+
+**Scanning files with AI.** In the New/Edit reviewer form, **Clean up with AI** (on by default once AI is set up) sends the text of your PDF, Word, PowerPoint and text files to the AI in pieces. It keeps only the lessons (definitions, key points, lists, steps) and drops the subject/course name, school, headers, footers, page numbers and cover pages. Long files take a while on the free tier because of Groq's per-minute limit; the app waits and retries, and if the AI can't help it falls back to the original text with the title, subject and file name removed. The same cleanup runs when you tap **Text to notes** on an attached file.
 
 ## Moving data without an account
 ☁️ (top right) > **Export** on one device, send the file over, **Import** on the other.
