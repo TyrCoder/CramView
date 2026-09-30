@@ -572,17 +572,35 @@ function viewHistory(r) {
 /* =====================================================================
    REVIEWER FORM
    ===================================================================== */
+let rfFiles = []; // files picked in the reviewer form, stored when you tap Save
 function reviewerForm(r) {
+  rfFiles = [];
   openModal(`<h2>${r ? 'Edit reviewer' : 'New reviewer'}</h2>
     <label class="field"><span class="label">Title</span><input type="text" id="f-title" maxlength="120" value="${esc(r?.title || '')}" placeholder="e.g. Chapter 3 — Cell Biology"></label>
     <label class="field"><span class="label">Subject</span><input type="text" id="f-subject" maxlength="80" value="${esc(r?.subject || '')}" placeholder="e.g. Biology"></label>
-    <label class="field"><span class="label">Notes / lessons</span><textarea id="f-notes" style="min-height:200px" placeholder="Paste or type your lessons here…">${esc(r?.notes || '')}</textarea></label>
+    <div class="section-title" style="margin:18px 4px 8px">Files</div>
+    <div id="rf-files" class="stack"></div>
+    <button type="button" class="btn block" style="margin-top:10px" data-act="rf-pick">${icon('plus')}Add files (PDF, PowerPoint, Word…)</button>
+    <input type="file" id="rf-input" multiple class="hidden">
+    <div class="card" style="padding:4px 16px;margin-top:12px">${toggleRow('rf-scan', 'Scan files for lessons &amp; notes', 'Text from PDF, Word, PowerPoint and text files is added to the notes', true)}</div>
+    <label class="field" style="margin-top:14px"><span class="label">Notes / lessons</span><textarea id="f-notes" style="min-height:200px" placeholder="Type or paste your lessons here. Text found in your files is added after it.">${esc(r?.notes || '')}</textarea></label>
     <div class="row" style="margin-top:18px">
       <button class="btn grow" data-act="close-modal">Cancel</button>
       <button class="btn primary grow" data-act="save-reviewer" data-id="${r?.id || ''}">Save</button>
     </div>
     ${r ? `<button class="btn danger block" style="margin-top:10px" data-act="delete-reviewer" data-id="${r.id}">Delete this reviewer</button>` : ''}`);
+  renderRfFiles();
   setTimeout(() => $('#f-title')?.focus(), 50);
+}
+function renderRfFiles() {
+  const box = $('#rf-files');
+  if (!box) return;
+  box.innerHTML = rfFiles.map((f, i) => `<div class="card" style="padding:10px 12px"><div class="list-item">
+      ${fileIcon(f.name)}
+      <div class="grow"><div class="ellip" style="font-weight:650">${esc(f.name)}</div>
+        <div class="small muted">${fmtSize(f.size)}${SCAN_RE.test(f.name) ? '' : ' · can’t be scanned'}</div></div>
+      <button type="button" class="btn sm ghost icon" data-act="rf-remove" data-i="${i}" aria-label="Remove file">${icon('x')}</button>
+    </div></div>`).join('');
 }
 
 /* =====================================================================
@@ -754,7 +772,7 @@ function viewExamSetup(r) {
 /** All readable text for a reviewer: its notes plus attached .docx/.pptx/.txt/.md files. */
 async function sourceTextOf(r) {
   const parts = [r.notes || ''];
-  for (const f of (await filesOf(r.id)).filter((x) => /\.(docx|pptx|txt|md)$/i.test(x.name))) {
+  for (const f of (await filesOf(r.id)).filter((x) => SCAN_RE.test(x.name))) {
     try { parts.push(await extractText(f)); } catch { /* skip unreadable file */ }
   }
   return parts.join('\n');
@@ -1318,7 +1336,7 @@ async function renderFiles(rid) {
     fileUrls.push(url);
     const ext = f.name.split('.').pop().toLowerCase();
     const canOpen = ext === 'pdf' || /^(png|jpe?g|gif|webp|txt)$/.test(ext);
-    const canExtract = /^(docx|pptx|txt|md)$/.test(ext);
+    const canExtract = /^(pdf|docx|pptx|txt|md)$/.test(ext);
     return `<div class="card">
       <div class="list-item">
         ${fileIcon(f.name)}
@@ -1382,38 +1400,164 @@ async function openZip(blob) {
     },
   };
 }
-/** Paragraph text from Word/PowerPoint XML (paragraph tag: 'p', text run tag: 't'). */
-function xmlParagraphs(xml) {
-  const doc = new DOMParser().parseFromString(xml, 'application/xml');
-  return [...doc.getElementsByTagNameNS('*', 'p')].map((p) => {
-    let s = '';
-    p.querySelectorAll('*').forEach((el) => {
-      if (el.localName === 't') s += el.textContent;
-      else if (el.localName === 'tab') s += '\t';
-      else if (el.localName === 'br') s += '\n';
-    });
-    return s.trim();
-  }).filter(Boolean);
+/** Text of one Word/PowerPoint paragraph node (ignores text belonging to paragraphs nested inside it, e.g. text boxes). */
+function paraText(p) {
+  let out = '';
+  p.querySelectorAll('*').forEach((el) => {
+    if (!['t', 'tab', 'br'].includes(el.localName)) return;
+    let owner = el.parentNode;
+    while (owner && owner.localName !== 'p') owner = owner.parentNode;
+    if (owner !== p) return;
+    out += el.localName === 't' ? el.textContent : el.localName === 'tab' ? '\t' : '\n';
+  });
+  return out.replace(/[ \t]+/g, ' ').trim();
 }
+const inFallback = (el) => { for (let n = el.parentNode; n; n = n.parentNode) if (n.localName === 'Fallback') return true; return false; };
+/** Word: paragraphs in order; list items get a bullet so lists can be recognised. */
+function docxLines(xml) {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  const out = [];
+  [...doc.getElementsByTagNameNS('*', 'p')].forEach((p) => {
+    if (inFallback(p)) return; // text boxes are stored twice; keep one copy
+    const t = paraText(p);
+    if (!t) return;
+    const listed = [...p.children].some((c) => c.localName === 'pPr' && [...c.children].some((x) => x.localName === 'numPr'));
+    out.push(listed ? `• ${t}` : t);
+  });
+  return out;
+}
+/** PowerPoint: titles stay plain lines, multi-line body text becomes bullets, tables stay plain. */
+function pptxLines(xml) {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  const shapes = [...doc.getElementsByTagNameNS('*', 'sp'), ...doc.getElementsByTagNameNS('*', 'graphicFrame')]
+    .sort((x, y) => (x.compareDocumentPosition(y) & 4 ? -1 : 1));
+  const out = [];
+  shapes.forEach((sh) => {
+    const paras = [...sh.getElementsByTagNameNS('*', 'p')].map(paraText).filter((t) => t && !/^\d{1,3}$/.test(t));
+    if (!paras.length) return;
+    const ph = sh.localName === 'sp' ? sh.getElementsByTagNameNS('*', 'ph')[0] : null;
+    const isTitle = ph && /title|ctrTitle|subTitle/i.test(ph.getAttribute('type') || '');
+    const bullet = sh.localName === 'sp' && !isTitle && paras.length >= 2;
+    paras.forEach((t) => out.push(bullet ? `• ${t}` : t));
+  });
+  return out;
+}
+/** Join lines, keeping bullets together and putting a blank line between other paragraphs. */
+function joinLines(lines) {
+  return lines.reduce((acc, l, i) => (i === 0 ? l : `${acc}${l.startsWith('• ') && lines[i - 1].startsWith('• ') ? '\n' : '\n\n'}${l}`), '');
+}
+/** Plain text files: handles UTF-8, UTF-16 and old Windows encodings. */
+async function readPlainText(blob) {
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  if (buf[0] === 0xFF && buf[1] === 0xFE) return new TextDecoder('utf-16le').decode(buf.subarray(2));
+  if (buf[0] === 0xFE && buf[1] === 0xFF) return new TextDecoder('utf-16be').decode(buf.subarray(2));
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { return new TextDecoder('windows-1252').decode(buf); }
+}
+
+/* PDF reading uses the bundled PDF.js (vendor/pdfjs), loaded only the first time a PDF is scanned. */
+const SCAN_RE = /\.(pdf|docx|pptx|txt|md)$/i;
+let pdfjsLoading = null;
+function loadPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (!pdfjsLoading) {
+    pdfjsLoading = new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = 'vendor/pdfjs/pdf.min.js';
+      el.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.js'; resolve(window.pdfjsLib); };
+      el.onerror = () => { pdfjsLoading = null; reject(new Error('Could not load the PDF reader. Check your connection and try again.')); };
+      document.head.appendChild(el);
+    });
+  }
+  return pdfjsLoading;
+}
+/** Turn one page's text pieces into clean lines. */
+function pageLines(items) {
+  const lines = [];
+  let cur = '';
+  let lastY = null;
+  for (const it of items) {
+    if (typeof it.str !== 'string') continue;
+    const y = it.transform ? it.transform[5] : 0;
+    if (lastY !== null && Math.abs(y - lastY) > (it.height || 10) * 0.6 && cur.trim()) { lines.push(cur); cur = ''; }
+    cur += it.str;
+    lastY = y;
+    if (it.hasEOL) { lines.push(cur); cur = ''; lastY = null; }
+  }
+  if (cur.trim()) lines.push(cur);
+  return lines.map((l) => l.replace(/\s+/g, ' ').trim().replace(/^[\uF000-\uF8FF•●▪◦‣▸►■□]\s*/, '• ')).filter(Boolean);
+}
+/** Drop page numbers and repeated headers/footers, and re-join sentences that wrapped onto the next line. */
+function tidyPdfPages(pages) {
+  const counts = new Map();
+  pages.forEach((lines) => new Set(lines).forEach((l) => counts.set(l, (counts.get(l) || 0) + 1)));
+  const repeated = (l) => pages.length >= 4 && l.length < 90 && counts.get(l) >= Math.max(3, pages.length * 0.6);
+  const out = [];
+  pages.forEach((lines) => {
+    const merged = [];
+    lines.filter((l) => !/^(page\s*)?\d{1,4}(\s*(of|\/)\s*\d{1,4})?$/i.test(l) && !repeated(l)).forEach((l) => {
+      const prev = merged[merged.length - 1];
+      if (prev !== undefined && prev.length > 35 && /^[a-z(]/.test(l) && !/[.!?:;]$/.test(prev)) {
+        merged[merged.length - 1] = /[a-z]-$/.test(prev) ? prev.slice(0, -1) + l : `${prev} ${l}`;
+      } else merged.push(l);
+    });
+    if (merged.length) out.push(merged.join('\n'));
+  });
+  return out.join('\n\n');
+}
+async function extractPdfText(blob) {
+  const lib = await loadPdfJs();
+  let pdf;
+  try {
+    pdf = await lib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) }).promise;
+  } catch (e) {
+    throw new Error(e && e.name === 'PasswordException' ? 'This PDF is password protected.' : 'This PDF could not be opened.');
+  }
+  const pages = [];
+  try {
+    for (let p = 1; p <= pdf.numPages; p++) pages.push(pageLines((await (await pdf.getPage(p)).getTextContent()).items));
+  } finally { pdf.destroy(); }
+  return tidyPdfPages(pages);
+}
+/** Read the text of several File objects into one block for the notes. */
+async function scanFilesToNotes(files, onProgress) {
+  const scannable = files.filter((f) => SCAN_RE.test(f.name));
+  const skipped = files.filter((f) => !SCAN_RE.test(f.name)).map((f) => f.name);
+  const parts = [];
+  const failed = [];
+  for (let i = 0; i < scannable.length; i++) {
+    if (onProgress) onProgress(i + 1, scannable.length);
+    try {
+      const t = await extractText({ name: scannable[i].name, blob: scannable[i] });
+      if (t) parts.push(`— ${scannable[i].name} —\n${t}`); else failed.push(scannable[i].name);
+    } catch (e) { failed.push(`${scannable[i].name} (${e.message.replace(/\.$/, '')})`); }
+  }
+  if (failed.length || skipped.length) {
+    toast(`Couldn’t read text from ${failed.concat(skipped).join(', ')}. Scanned pictures can’t be read, and old .doc/.ppt files need to be saved as .docx/.pptx first.`);
+  }
+  return parts.join('\n\n');
+}
+
 async function extractText(rec) {
   const ext = rec.name.split('.').pop().toLowerCase();
-  if (ext === 'txt' || ext === 'md') return (await rec.blob.text()).trim();
+  if (ext === 'txt' || ext === 'md') return (await readPlainText(rec.blob)).trim();
+  if (ext === 'pdf') return extractPdfText(rec.blob);
+  if (ext === 'doc' || ext === 'ppt') throw new Error('Old .doc/.ppt files can’t be read. Open it in Word/PowerPoint and save it as .docx/.pptx.');
   const zip = await openZip(rec.blob);
   if (ext === 'docx') {
     if (!zip.names.includes('word/document.xml')) throw new Error('No text found in this document.');
-    return xmlParagraphs(await zip.text('word/document.xml')).join('\n\n');
+    return joinLines(docxLines(await zip.text('word/document.xml')));
   }
   if (ext === 'pptx') {
     const slides = zip.names.filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
-      .sort((a, b) => parseInt(a.match(/(\d+)\.xml$/)[1], 10) - parseInt(b.match(/(\d+)\.xml$/)[1], 10));
+      .sort((x, y) => parseInt(x.match(/(\d+)\.xml$/)[1], 10) - parseInt(y.match(/(\d+)\.xml$/)[1], 10));
     const parts = [];
     for (let i = 0; i < slides.length; i++) {
-      const lines = xmlParagraphs(await zip.text(slides[i]));
+      const lines = pptxLines(await zip.text(slides[i]));
       if (lines.length) parts.push(`Slide ${i + 1}\n${lines.join('\n')}`);
     }
     return parts.join('\n\n');
   }
-  throw new Error('Text extraction works for .docx, .pptx, .txt and .md files.');
+  throw new Error('Text extraction works for .pdf, .docx, .pptx, .txt and .md files.');
 }
 async function extractToNotes(fileId) {
   const rec = await getFile(fileId);
@@ -1643,7 +1787,7 @@ function generateCardItems(text, count) {
 /* ---------- UI ---------- */
 let gen = null; // { rid, mode: 'questions' | 'cards', files, items, keepCards }
 async function openGenerator(rid, mode) {
-  const files = (await filesOf(rid)).filter((f) => /\.(docx|pptx|txt|md)$/i.test(f.name));
+  const files = (await filesOf(rid)).filter((f) => SCAN_RE.test(f.name));
   gen = { rid, mode, files, items: [], keepCards: true };
   renderGenSetup();
 }
@@ -1673,7 +1817,7 @@ function renderGenSetup() {
       <button class="btn grow" data-act="close-modal">Cancel</button>
       <button class="btn primary grow" data-act="gen-run" ${none ? 'disabled' : ''}>${icon('sparkles')}Generate</button>
     </div>
-    ${none ? '<p class="small muted center" style="margin-top:10px">Add notes or attach a .docx, .pptx, .txt or .md file first.</p>' : ''}`);
+    ${none ? '<p class="small muted center" style="margin-top:10px">Add notes or attach a PDF, .docx, .pptx, .txt or .md file first.</p>' : ''}`);
 }
 async function genRun() {
   const r = getReviewer(gen.rid);
@@ -1799,14 +1943,42 @@ const ACTIONS = {
   /* reviewers */
   'new-reviewer': () => reviewerForm(null),
   'edit-reviewer': (el) => reviewerForm(getReviewer(el.dataset.id)),
-  'save-reviewer': (el) => {
+  'rf-pick': () => $('#rf-input').click(),
+  'rf-remove': (el) => { rfFiles.splice(Number(el.dataset.i), 1); renderRfFiles(); },
+  'save-reviewer': async (el) => {
     const title = $('#f-title').value.trim();
     if (!title) return toast('Please enter a title.');
     const old = el.dataset.id ? getReviewer(el.dataset.id) : null;
-    const r = { id: old?.id || uid(), title, subject: $('#f-subject').value.trim(), notes: $('#f-notes').value.trim(), created: old?.created || now(), updated: now() };
-    save('reviewers', r);
+    const typed = $('#f-notes').value.trim();
+    const scan = !!$('#rf-scan')?.checked;
+    const files = rfFiles.slice();
+    const r = { id: old?.id || uid(), title, subject: $('#f-subject').value.trim(), notes: typed, created: old?.created || now(), updated: now() };
+    const label = el.innerHTML;
+    el.disabled = true;
+    let scanned = false;
+    try {
+      save('reviewers', r);
+      if (files.length) {
+        el.innerHTML = `${icon('file')}Saving files…`;
+        await addFiles(files, r.id);
+        if (scan) {
+          const found = await scanFilesToNotes(files, (i, n) => { el.innerHTML = `${icon('sparkles')}Scanning ${i} of ${n}…`; });
+          if (found) {
+            r.notes = `${typed ? `${typed}\n\n` : ''}${found}`;
+            r.updated = now();
+            save('reviewers', r);
+            scanned = true;
+          }
+        }
+      }
+    } catch (e) {
+      toast(e.message || 'Could not save.');
+      el.disabled = false;
+      el.innerHTML = label;
+      return;
+    }
     closeModal();
-    toast('Saved');
+    toast(scanned ? 'Saved. Lessons added from your files' : 'Saved');
     if (old) route(); else go(`/r/${r.id}`);
   },
   'delete-reviewer': async (el) => {
@@ -1993,6 +2165,11 @@ document.addEventListener('input', (e) => {
   if (e.target.id === 'search') $('#home-list').innerHTML = homeList(e.target.value);
 });
 document.addEventListener('change', (e) => {
+  if (e.target.id === 'rf-input' && e.target.files.length) {
+    rfFiles.push(...e.target.files);
+    renderRfFiles();
+    e.target.value = '';
+  }
   if (e.target.classList?.contains('gen-pick')) updateGenCount();
   if (e.target.id === 'file-input' && e.target.files.length) {
     addFiles([...e.target.files], location.hash.split('/')[2]);

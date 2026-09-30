@@ -52,8 +52,11 @@ After changing any cached file, bump `CACHE_VERSION` in `service-worker.js` (e.g
 ## Attaching files
 On a reviewer's page tap **+ Add files** (PDF, PowerPoint, Word, anything up to 50 MB). Files are kept on the device you add them on: they are **not** included in cloud sync or the JSON export. PDFs and images open in the browser; everything can be downloaded. For `.docx`, `.pptx`, `.txt` and `.md` files, **Text → notes** copies the text into the reviewer's notes (old `.doc`/`.ppt` files, scanned PDFs and PDF text extraction are not supported).
 
+## Creating a reviewer from files
+When you create (or edit) a reviewer you can add PDF, PowerPoint, Word or text files. With **Scan files for lessons & notes** on, the text found in them is added to the notes automatically, so quizzes and flashcards can be made from it right away. PDF reading uses the bundled [PDF.js](https://github.com/mozilla/pdf.js) library in `vendor/pdfjs/` (Apache-2.0 license included). Supported for scanning: PDF, `.docx`, `.pptx`, `.txt`, `.md`. Not supported: scanned pictures (there is no text in them) and old `.doc`/`.ppt` files (open them in Word/PowerPoint and save as `.docx`/`.pptx` first).
+
 ## Random quizzes and auto-generated questions
-**Quiz Mode and Exam Mode build a fresh random set each time.** On the setup screen choose where the questions come from (**Random**, **Saved**, or **Mixed**), pick one or more question types (multiple choice, true/false, identification, enumeration) and how many. Random questions are made on your device from the reviewer's notes plus any attached `.docx`, `.pptx`, `.txt`, `.md` files. **New random set** on the results screen makes another one.
+**Quiz Mode and Exam Mode build a fresh random set each time.** On the setup screen choose where the questions come from (**Random**, **Saved**, or **Mixed**), pick one or more question types (multiple choice, true/false, identification, enumeration) and how many. Random questions are made on your device from the reviewer's notes plus any attached PDF, `.docx`, `.pptx`, `.txt`, `.md` files. **New random set** on the results screen makes another one.
 
 To keep generated questions, tap **Auto-generate from notes & files** on a reviewer (also on the Questions and Flashcards pages), review the preview, untick what you don't want, and add them (optionally with flashcards).
 

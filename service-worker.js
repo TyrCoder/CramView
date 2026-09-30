@@ -7,7 +7,7 @@
    - When you change app files, also bump CACHE_VERSION below. The app will
      then show an "Update" button so the new version loads right away.
 */
-const CACHE_VERSION = 'v1.6.0';
+const CACHE_VERSION = 'v1.7.1';
 const CACHE_NAME = `cramview-${CACHE_VERSION}`;
 
 const APP_SHELL = [
@@ -16,6 +16,8 @@ const APP_SHELL = [
   './style.css',
   './config.js',
   './app.js',
+  './vendor/pdfjs/pdf.min.js',
+  './vendor/pdfjs/pdf.worker.min.js',
   './manifest.json',
   './icons/icon.svg',
   './icons/icon-192.png',
