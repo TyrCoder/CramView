@@ -302,7 +302,9 @@ let settings = structuredClone(DEFAULT_SETTINGS);
 try {
   const s = JSON.parse(localStorage.getItem('cramview-settings') || '{}');
   for (const k of Object.keys(settings)) Object.assign(settings[k], s[k] || {});
+  if (!s.aiMigrated) { settings.quiz.source = 'auto'; settings.exam.source = 'auto'; }
 } catch { /* defaults */ }
+settings.aiMigrated = true;
 const saveSettings = () => { try { localStorage.setItem('cramview-settings', JSON.stringify(settings)); } catch { /* ignore */ } };
 
 /* =====================================================================
@@ -712,11 +714,12 @@ function toggleRow(id, title, sub, on) {
   return `<label class="toggle"><span class="t-text"><b>${title}</b><span class="small muted">${sub}</span></span>
     <span class="switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><i></i></span></label>`;
 }
-const SRC_LABEL = [['generated', 'Random'], ['saved', 'Saved'], ['mixed', 'Mixed']];
+const SRC_LABEL = [['ai', 'AI'], ['generated', 'Offline'], ['saved', 'Saved'], ['mixed', 'Mixed']];
 const SRC_HINT = {
-  generated: 'A fresh random set made from your notes and attached files every time you start.',
+  ai: 'The AI writes a fresh set from your notes and files every time. Needs internet, and your Groq key or an account (Sync & backup).',
+  generated: 'Simple offline rules, no AI: a fresh random set from your notes and files. Works without internet.',
   saved: 'Only the questions you wrote or saved in this reviewer.',
-  mixed: 'Some of your saved questions plus fresh random ones.',
+  mixed: 'Some of your saved questions plus fresh AI-written ones (offline rules if AI is unavailable).',
 };
 function questionSourceCard(src, types, count, max) {
   return `<div class="section-title">Questions</div>
@@ -733,6 +736,7 @@ function questionSourceCard(src, types, count, max) {
 }
 function defaultSource(r, s, saved) {
   if (s.source && s.source !== 'auto') return s.source;
+  if (aiMethod()) return 'ai';
   return (r.notes || '').length > 40 || !saved ? 'generated' : 'saved';
 }
 function viewQuizSetup(r) {
@@ -782,11 +786,12 @@ async function buildQuestionPool(setup) {
   const rid = setup.reviewerId;
   const r = getReviewer(rid);
   const count = setup.count;
-  const saved = setup.source === 'generated' ? [] : qsOf(rid).filter((q) => setup.types.includes(q.type));
+  const saved = (setup.source === 'generated' || setup.source === 'ai') ? [] : qsOf(rid).filter((q) => setup.types.includes(q.type));
   let made = [];
   if (setup.source !== 'saved') {
-    made = generateQuestions(await sourceTextOf(r), { types: setup.types, count }).map((it) => ({
-      id: uid(), reviewerId: rid, type: it.type, text: it.text, answer: it.answer, ...(it.type === 'mc' ? { choices: it.choices } : {}),
+    made = (await madeQuestions(await sourceTextOf(r), setup)).map((it) => ({
+      id: uid(), reviewerId: rid, type: it.type, text: it.text, answer: it.answer,
+      ...(it.type === 'mc' ? { choices: it.choices } : {}), ...(it.explanation ? { explanation: it.explanation } : {}),
     }));
   }
   let pool;
@@ -798,7 +803,7 @@ async function buildQuestionPool(setup) {
   }
   if (!pool.length) {
     throw new Error(setup.source === 'saved'
-      ? 'No saved questions of those types. Add some, or switch to Random from notes.'
+      ? 'No saved questions of those types. Add some, or switch to AI or Offline.'
       : 'Couldn’t find enough facts in your notes for those types. Try more types, or add notes or files.');
   }
   return pool.slice(0, count);
@@ -915,6 +920,7 @@ function renderQuestion() {
     feedback = `<div class="feedback ${it.correct ? 'good' : 'bad'}">
       <div class="fb-title">${it.correct ? `${icon('check-circle')}Correct!` : `${icon('x-circle')}Wrong`}</div>
       ${it.correct ? '' : `<div class="ans">Correct answer: ${esc(correctText(q))}</div>`}
+      ${q.explanation ? `<div class="why">${esc(q.explanation)}</div>` : ''}
     </div>`;
   }
   const last = s.index + 1 >= s.items.length;
@@ -1004,6 +1010,7 @@ function renderResults() {
       <div style="margin-top:8px;font-weight:650;white-space:pre-wrap;overflow-wrap:anywhere">${esc(q.text)}</div>
       <div class="small" style="margin-top:6px;overflow-wrap:anywhere">Your answer: <b>${yours === null ? '—' : esc(yours) || '(blank)'}</b></div>
       ${it.correct ? '' : `<div class="small" style="overflow-wrap:anywhere">Correct answer: <b>${esc(correctText(q))}</b></div>`}
+      ${q.explanation ? `<div class="small muted" style="margin-top:4px;overflow-wrap:anywhere">${esc(q.explanation)}</div>` : ''}
     </div>`;
   }).join('');
 
@@ -1205,10 +1212,27 @@ function bindSwipe() {
 /* =====================================================================
    BACKUP: export / import
    ===================================================================== */
+function aiCard() {
+  const m = aiMethod();
+  const status = m === 'key' ? 'Using your own Groq key on this device.'
+    : m === 'account' ? 'Using your Cramview account (the Supabase function). Add your own key below to use that instead.'
+      : `Not set up yet. Add your own Groq key below${syncConfigured ? ', or sign in above and deploy the function (see the README)' : ''}.`;
+  return `<div class="card stack"><div class="card-title">${icon('sparkles')}AI questions</div>
+    <p class="small ${m ? '' : 'muted'}" id="ai-status">${status}</p>
+    <label class="field"><span class="label">Your Groq API key</span>
+      <input type="password" id="ai-key" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${aiCfg.key ? 'A key is saved on this device' : 'gsk_...'}"></label>
+    <details><summary>Model (optional)</summary>
+      <input type="text" id="ai-model" autocomplete="off" autocapitalize="none" spellcheck="false" style="margin-top:8px" value="${esc(aiCfg.model || '')}" placeholder="${AI_DEFAULT_MODEL}"></details>
+    <div class="btn-grid"><button class="btn primary" data-act="ai-save">Save key</button>
+      <button class="btn" data-act="ai-test" ${m ? '' : 'disabled'}>Test AI</button></div>
+    ${aiCfg.key ? '<button class="btn danger block sm" data-act="ai-clear">Remove my key</button>' : ''}
+    <p class="muted small">Get a free key at console.groq.com/keys. Your key stays on this device only (it isn’t synced or included in backups) and is sent only to Groq.</p></div>`;
+}
 function viewData() {
   render(`${topbar('Sync & backup', '/')}
     <main class="container stack">
       ${syncCard()}
+      ${aiCard()}
       <div class="card stack">
         <div class="card-title">Backup file</div>
         <p class="muted small">Without cloud sync, your data is saved only on this device. Export a file, send it to another device (AirDrop, email, Files), then import it there.</p>
@@ -1589,6 +1613,218 @@ async function extractToNotes(fileId) {
 }
 
 /* =====================================================================
+   AI — writes questions and flashcards from your material.
+   Two ways in, tried in this order:
+     1) your own Groq API key, saved on this device only (the app calls Groq directly);
+     2) your signed-in Cramview account, through the Supabase function "generate-quiz" (the key stays on the server).
+   If neither is set up, or the AI fails, the offline generator below is used instead.
+   ===================================================================== */
+const AI_DEFAULT_MODEL = 'llama-3.3-70b-versatile';
+let aiCfg = {}; // { key, model } — never synced or exported
+try { aiCfg = JSON.parse(localStorage.getItem('cramview-ai') || '{}') || {}; } catch { aiCfg = {}; }
+const saveAiCfg = () => {
+  try { if (Object.keys(aiCfg).length) localStorage.setItem('cramview-ai', JSON.stringify(aiCfg)); else localStorage.removeItem('cramview-ai'); } catch { /* ignore */ }
+};
+/** 'key' (your own key), 'account' (Supabase function) or null (not set up). */
+const aiMethod = () => (aiCfg.key ? 'key' : (syncConfigured && auth ? 'account' : null));
+
+const AI_SYSTEM_Q = `You are an experienced teacher writing practice questions for a student. Use ONLY the study material you are given. Reply with a single JSON object.
+
+Output format: {"questions":[ ... ]}. Every question has "type", "text" and a short "explanation" (one sentence saying why the answer is right). The types are:
+- "mc": multiple choice. Fields: "choices" (exactly 4 different strings) and "answer" (the index 0-3 of the correct choice).
+- "tf": true or false. "text" is a statement. "answer" is true or false.
+- "id": identification. "answer" is a short specific term, name or number (1 to 4 words). You may list accepted alternatives separated by " | ".
+- "enum": enumeration. "text" asks the student to list ALL N items (put the number N in the question). "answer" is an array of 3 to 8 short strings.
+
+Rules:
+- Write natural, self-contained questions that test understanding of the ideas, not trivia about wording or layout.
+- Never mention "the text", "the passage", "the material", "the notes", "the document", "the slide" or "the reviewer". Never refer to page numbers.
+- Multiple choice: one clearly correct choice and three plausible but clearly wrong choices taken from the same topic. Do not use "all of the above" or "none of the above".
+- True or false: make about half of them false by changing one key fact; a false statement must be plainly wrong according to the material.
+- Identification: the question must have one unambiguous answer and must not contain the answer.
+- Spread the questions across different parts of the material and do not repeat a fact.
+- Use the same language as the material. Ignore headers, footers, page numbers and file names.`;
+const AI_SYSTEM_C = `You are an experienced teacher making flashcards for a student. Use ONLY the study material you are given. Reply with a single JSON object: {"cards":[{"front":"...","back":"..."}]}.
+Each card covers one important idea. "front" is a short term, concept or question. "back" is a clear, concise answer or definition (under 30 words). Cover different parts of the material, never mention "the text" or "the material", do not repeat cards, and use the same language as the material. Ignore headers, footers, page numbers and file names.`;
+
+const aiStr = (v, max = 600) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+/** Keep only well-formed AI questions, in exactly the shape the app stores. */
+function aiCleanQuestion(q, allowed) {
+  if (!q || typeof q !== 'object') return null;
+  const type = aiStr(q.type, 10).toLowerCase();
+  if (!allowed.includes(type)) return null;
+  const text = aiStr(q.text, 500);
+  if (text.length < 8) return null;
+  const explanation = aiStr(q.explanation, 240);
+  const base = { type, text, ...(explanation ? { explanation } : {}) };
+  if (type === 'mc') {
+    const choices = Array.isArray(q.choices) ? q.choices.map((c) => aiStr(c, 200)) : [];
+    if (choices.length !== 4 || choices.some((c) => !c) || new Set(choices.map(normKey)).size !== 4) return null;
+    const idx = Number.isInteger(q.answer) ? q.answer : choices.findIndex((c) => normKey(c) === normKey(aiStr(q.answer)));
+    if (!(idx >= 0 && idx < 4)) return null;
+    const right = choices[idx];
+    const mixed = shuffle(choices);
+    return { ...base, choices: mixed, answer: mixed.indexOf(right) };
+  }
+  if (type === 'tf') {
+    const yes = q.answer === true || String(q.answer).toLowerCase() === 'true';
+    const no = q.answer === false || String(q.answer).toLowerCase() === 'false';
+    return yes || no ? { ...base, answer: yes } : null;
+  }
+  if (type === 'id') {
+    const answer = Array.isArray(q.answer) ? q.answer.map((x) => aiStr(x, 80)).filter(Boolean).join(' | ') : aiStr(q.answer, 120);
+    if (!answer || answer.split(' ').length > 8) return null;
+    if (normKey(text).includes(normKey(answer)) && answer.length > 3) return null;
+    return { ...base, answer };
+  }
+  const items = (Array.isArray(q.answer) ? q.answer : []).map((x) => aiStr(x, 80)).filter(Boolean);
+  const unique = items.filter((x, i) => items.findIndex((y) => normKey(y) === normKey(x)) === i);
+  if (unique.length < 3 || unique.length > 10) return null;
+  const withCount = /\d|\b(three|four|five|six|seven|eight|nine|ten|all)\b/i.test(text) ? text : `${text} (${unique.length} items)`;
+  return { ...base, text: withCount, answer: unique };
+}
+function aiCleanCard(c) {
+  const front = aiStr(c?.front, 300);
+  const back = aiStr(c?.back, 500);
+  return front.length >= 2 && back ? { front, back } : null;
+}
+/** Clean the model's JSON into { questions } or { cards }. */
+function aiShape(parsed, { mode, count, types }) {
+  const seen = new Set();
+  const fresh = (k) => { const x = normKey(k); if (seen.has(x)) return false; seen.add(x); return true; };
+  if (mode === 'cards') {
+    return { cards: (Array.isArray(parsed?.cards) ? parsed.cards : []).map(aiCleanCard).filter((c) => c && fresh(c.front)).slice(0, count) };
+  }
+  return { questions: (Array.isArray(parsed?.questions) ? parsed.questions : []).map((q) => aiCleanQuestion(q, types)).filter((q) => q && fresh(q.text)).slice(0, count) };
+}
+
+async function withTimeout(start, ms = 45000) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try { return await start(ctl.signal); } finally { clearTimeout(timer); }
+}
+const aiNetworkError = (e) => new Error(e.name === 'AbortError' ? 'The AI took too long to answer.' : 'Could not reach the AI. Check your connection.');
+
+/** Way 1: talk to Groq directly with the key saved on this device. */
+async function callGroq({ mode, text, count, types }) {
+  const user = mode === 'cards'
+    ? `Make ${count} flashcards from this study material.\n\nSTUDY MATERIAL:\n"""\n${text}\n"""`
+    : `Write ${count} questions using only these types: ${types.join(', ')}. Mix the types fairly evenly.\n\nSTUDY MATERIAL:\n"""\n${text}\n"""`;
+  let res;
+  try {
+    res = await withTimeout((signal) => fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      signal,
+      headers: { Authorization: `Bearer ${aiCfg.key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: aiCfg.model || AI_DEFAULT_MODEL,
+        temperature: 0.7,
+        max_tokens: 4000,
+        response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: mode === 'cards' ? AI_SYSTEM_C : AI_SYSTEM_Q }, { role: 'user', content: user }],
+      }),
+    }));
+  } catch (e) { throw aiNetworkError(e); }
+  if (res.status === 401) throw new Error('Groq rejected your API key. Check it in Sync & backup.');
+  if (res.status === 429) throw new Error('Groq is busy, or your limit was reached. Try again in a minute.');
+  if (!res.ok) {
+    let detail = '';
+    try { detail = (await res.json())?.error?.message || ''; } catch { /* no body */ }
+    throw new Error(`Groq returned an error (${res.status}). ${detail.slice(0, 120)}`.trim());
+  }
+  let parsed;
+  try { parsed = JSON.parse((await res.json())?.choices?.[0]?.message?.content ?? '{}'); } catch { throw new Error('The AI sent back something unreadable. Try again.'); }
+  return aiShape(parsed, { mode, count, types });
+}
+/** Way 2: the Supabase function (the Groq key stays on the server). */
+async function callAiFunction(payload) {
+  await ensureToken();
+  let res;
+  try {
+    res = await withTimeout((signal) => fetch(`${SB_URL}/functions/v1/generate-quiz`, {
+      method: 'POST',
+      signal,
+      headers: { 'Content-Type': 'application/json', apikey: CFG.supabaseAnonKey, Authorization: `Bearer ${auth.access_token}` },
+      body: JSON.stringify(payload),
+    }));
+  } catch (e) { throw aiNetworkError(e); }
+  let j = null;
+  try { j = await res.json(); } catch { /* no body */ }
+  if (!res.ok) throw new Error((j && j.error) || (res.status === 404 ? 'The AI function isn’t deployed yet (see the README).' : `The AI request failed (${res.status}).`));
+  return j || {};
+}
+async function callAi(payload) {
+  const method = aiMethod();
+  if (!method) throw new Error('AI isn’t set up. Add your Groq key or sign in (Sync & backup).');
+  return method === 'key' ? callGroq(payload) : aiShape(await callAiFunction(payload), payload);
+}
+
+/** For long material, send a random stretch of it so each quiz covers different parts. */
+function textWindow(text, max) {
+  if (text.length <= max) return text;
+  let start = Math.floor(Math.random() * (text.length - max));
+  const nl = text.lastIndexOf('\n', start);
+  if (nl >= 0 && start - nl < 600) start = nl + 1;
+  let end = start + max;
+  const endNl = text.lastIndexOf('\n', end);
+  if (endNl > start + max * 0.6) end = endNl;
+  return text.slice(start, end);
+}
+const aiItem = (q) => ({ ...q, card: { front: q.text, back: correctText(q) + (q.explanation ? `\n\n${q.explanation}` : '') } });
+const AI_WINDOW = 9000;
+async function aiQuestions(text, { types, count }) {
+  const out = [];
+  const seen = new Set();
+  for (let call = 0; call < 4 && out.length < count; call++) {
+    let res;
+    try {
+      res = await callAi({ mode: 'questions', text: textWindow(text, AI_WINDOW), count: Math.min(count - out.length, 15), types });
+    } catch (e) {
+      if (!out.length) throw e;
+      break; // keep what we already have
+    }
+    for (const q of res.questions || []) {
+      if (!seen.has(normKey(q.text))) { seen.add(normKey(q.text)); out.push(aiItem(q)); }
+    }
+    if (text.length <= AI_WINDOW) break; // the whole text was already used
+  }
+  return out.slice(0, count);
+}
+async function aiCards(text, count) {
+  const out = [];
+  const seen = new Set();
+  for (let call = 0; call < 4 && out.length < count; call++) {
+    let res;
+    try {
+      res = await callAi({ mode: 'cards', text: textWindow(text, AI_WINDOW), count: Math.min(count - out.length, 20) });
+    } catch (e) {
+      if (!out.length) throw e;
+      break;
+    }
+    for (const c of res.cards || []) {
+      if (!seen.has(normKey(c.front))) { seen.add(normKey(c.front)); out.push({ card: c }); }
+    }
+    if (text.length <= AI_WINDOW) break;
+  }
+  return out.slice(0, count);
+}
+/** Questions for a quiz: AI when chosen and available, otherwise (or if it fails) the offline generator. */
+async function madeQuestions(text, { source, types, count }) {
+  if (source === 'ai' || source === 'mixed') {
+    if (!aiMethod()) {
+      toast('AI isn’t set up (add your Groq key or sign in). Used the offline generator instead.');
+    } else {
+      try {
+        const items = await aiQuestions(text, { types, count });
+        if (items.length) return items;
+        toast('The AI gave nothing usable. Used the offline generator instead.');
+      } catch (e) { toast(`${e.message} Used the offline generator instead.`); }
+    }
+  }
+  return generateQuestions(text, { types, count });
+}
+
+/* =====================================================================
    AUTO-GENERATE — questions and flashcards from notes / attached files.
    Rule-based and offline (no account, no AI). It finds "Term: meaning" lines and full sentences, then
    blanks out a key term (names, numbers, long words) and borrows wrong answers from elsewhere in the text.
@@ -1797,7 +2033,8 @@ function renderGenSetup() {
   const q = gen.mode === 'questions';
   const none = !hasNotes && !gen.files.length;
   openModal(`<h2>${q ? 'Auto-generate questions' : 'Generate flashcards'}</h2>
-    <p class="muted small">Builds practice from your notes and files, right on your device. It works best with full sentences or “Term: meaning” lines. You can review everything before adding it.</p>
+    <p class="muted small">Builds practice from your notes and files. Turn on AI for natural questions, or use the offline rules (they work best with full sentences or “Term: meaning” lines). You can review everything before adding it.</p>
+    <div class="card" style="padding:4px 16px;margin-top:12px">${toggleRow('g-ai', `${icon('sparkles')}Use AI`, aiMethod() ? 'Better questions. Needs internet; falls back to offline if it fails.' : 'Add your Groq key in Sync &amp; backup (or sign in) to turn this on.', !!aiMethod()).replace('<input type="checkbox"', aiMethod() ? '<input type="checkbox"' : '<input type="checkbox" disabled')}</div>
     <div class="section-title" style="margin-top:16px">Use text from</div>
     <div class="card" style="padding:4px 16px">
       ${toggleRow('g-notes', 'Reviewer notes', hasNotes ? `${(r.notes || '').length.toLocaleString()} characters` : 'No notes yet', hasNotes).replace('<input type="checkbox"', hasNotes ? '<input type="checkbox"' : '<input type="checkbox" disabled')}
@@ -1836,10 +2073,22 @@ async function genRun() {
     gen.keepCards = !!$('#g-cards', m)?.checked;
   }
   gen.count = n;
-  genRegenerate();
+  gen.useAi = !!$('#g-ai', m)?.checked && !!aiMethod();
+  await genRegenerate();
 }
-function genRegenerate() {
-  gen.items = gen.mode === 'questions' ? generateQuestions(gen.text, { types: gen.types, count: gen.count }) : generateCardItems(gen.text, gen.count);
+async function genRegenerate(btn) {
+  const label = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = `${icon('sparkles')}Working…`; }
+  let items = null;
+  if (gen.useAi) {
+    try {
+      items = gen.mode === 'questions' ? await aiQuestions(gen.text, { types: gen.types, count: gen.count }) : await aiCards(gen.text, gen.count);
+      if (!items.length) { items = null; toast('The AI gave nothing usable. Used the offline generator instead.'); }
+    } catch (e) { toast(`${e.message} Used the offline generator instead.`); }
+  }
+  gen.ai = !!items;
+  gen.items = items || (gen.mode === 'questions' ? generateQuestions(gen.text, { types: gen.types, count: gen.count }) : generateCardItems(gen.text, gen.count));
+  if (btn) { btn.disabled = false; btn.innerHTML = label; }
   renderGenPreview();
 }
 function genItemHtml(it, i) {
@@ -1848,7 +2097,8 @@ function genItemHtml(it, i) {
       <div class="small muted" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(it.card.back)}</div>`
     : `<div style="font-weight:650;white-space:pre-wrap;overflow-wrap:anywhere">${esc(it.text)}</div>
       ${it.type === 'mc' ? `<div class="small" style="margin-top:4px">${it.choices.map((c, k) => `<div class="${k === it.answer ? '' : 'muted'}" style="${k === it.answer ? 'font-weight:700' : ''}">${'ABCD'[k]}. ${esc(c)}</div>`).join('')}</div>`
-        : `<div class="small muted" style="margin-top:4px">Answer: <b>${esc(it.type === 'tf' ? (it.answer ? 'True' : 'False') : Array.isArray(it.answer) ? it.answer.join(', ') : it.answer)}</b></div>`}`;
+        : `<div class="small muted" style="margin-top:4px">Answer: <b>${esc(it.type === 'tf' ? (it.answer ? 'True' : 'False') : Array.isArray(it.answer) ? it.answer.join(', ') : it.answer)}</b></div>`}
+      ${it.explanation ? `<div class="small muted" style="margin-top:4px">${esc(it.explanation)}</div>` : ''}`;
   return `<label class="card" style="display:flex;gap:12px;align-items:flex-start;padding:14px;cursor:pointer">
     <input type="checkbox" class="gen-pick" data-i="${i}" checked style="width:22px;height:22px;margin-top:2px;accent-color:var(--primary);flex:none">
     <div class="grow">${q ? `<span class="badge primary" style="margin-bottom:6px">${TYPE_LABEL[it.type]}</span>` : ''}${body}</div></label>`;
@@ -1862,7 +2112,7 @@ function renderGenPreview() {
     return;
   }
   openModal(`<h2>${q ? 'Review questions' : 'Review flashcards'}</h2>
-    <p class="muted small">Untick anything you don’t want. Answers are chosen automatically, so give them a quick look.</p>
+    <p class="muted small">${gen.ai ? 'Written by AI. ' : ''}Untick anything you don’t want. Answers are chosen automatically, so give them a quick look.</p>
     <div class="stack" style="margin-top:12px;max-height:52dvh;overflow-y:auto;padding:2px">${gen.items.map(genItemHtml).join('')}</div>
     <div class="row" style="margin-top:16px">
       <button class="btn grow" data-act="gen-back">Back</button>
@@ -1889,6 +2139,7 @@ function genAdd() {
     if (gen.mode === 'questions' && !haveQ.has(normKey(it.text))) {
       const q = { id: uid(), reviewerId: rid, type: it.type, text: it.text, answer: it.answer, created: t + i };
       if (it.type === 'mc') q.choices = it.choices;
+      if (it.explanation) q.explanation = it.explanation;
       save('questions', q);
       haveQ.add(normKey(it.text));
       nq++;
@@ -2023,6 +2274,7 @@ const ACTIONS = {
   'src-pick': (el) => {
     $$('#o-src button').forEach((b) => b.classList.toggle('on', b === el));
     $('#o-src-hint').textContent = SRC_HINT[el.dataset.v];
+    $('#o-src').dataset.picked = '1';
   },
   'type-pick': (el) => {
     if (el.classList.contains('on') && $$('#o-types .chip.on').length === 1) return toast('Keep at least one question type.');
@@ -2031,15 +2283,16 @@ const ACTIONS = {
   begin: async (el) => {
     const rid = el.dataset.id;
     const source = $('#o-src .on').dataset.v;
+    const picked = !!$('#o-src').dataset.picked;
     const types = $$('#o-types .chip.on').map((b) => b.dataset.t);
     const count = clamp(parseInt($('#o-count').value, 10) || 1, 1, el.dataset.mode === 'quiz' ? 100 : 60);
     let setup;
     if (el.dataset.mode === 'quiz') {
-      settings.quiz = { shuffleQ: $('#o-shufq').checked, shuffleC: $('#o-shufc').checked, lives: $('#o-lives').checked, source, types, count };
-      setup = { mode: 'quiz', reviewerId: rid, ...settings.quiz };
+      settings.quiz = { shuffleQ: $('#o-shufq').checked, shuffleC: $('#o-shufc').checked, lives: $('#o-lives').checked, source: picked ? source : 'auto', types, count };
+      setup = { mode: 'quiz', reviewerId: rid, ...settings.quiz, source };
     } else {
       const minutes = clamp(parseInt($('#o-min').value, 10) || 1, 1, 300);
-      settings.exam = { count, minutes, shuffle: $('#o-shuf').checked, lives: $('#o-lives').checked, source, types };
+      settings.exam = { count, minutes, shuffle: $('#o-shuf').checked, lives: $('#o-lives').checked, source: picked ? source : 'auto', types };
       setup = { mode: 'exam', reviewerId: rid, count, minutes, source, types, shuffleQ: settings.exam.shuffle, shuffleC: settings.exam.shuffle, lives: settings.exam.lives };
     }
     saveSettings();
@@ -2079,8 +2332,13 @@ const ACTIONS = {
   /* flashcards */
   'generate-cards': (el) => generateCards(el.dataset.id),
   'gen-open': (el) => openGenerator(el.dataset.rid, el.dataset.mode),
-  'gen-run': (el) => { el.disabled = true; genRun().finally(() => { el.disabled = false; }); },
-  'gen-again': () => genRegenerate(),
+  'gen-run': (el) => {
+    const label = el.innerHTML;
+    el.disabled = true;
+    el.innerHTML = `${icon('sparkles')}Working…`;
+    genRun().finally(() => { el.disabled = false; el.innerHTML = label; });
+  },
+  'gen-again': (el) => genRegenerate(el),
   'gen-back': () => renderGenSetup(),
   'gen-add': () => genAdd(),
   'new-card': (el) => cardForm(el.dataset.rid, null),
@@ -2133,6 +2391,30 @@ const ACTIONS = {
     const f = await getFile(el.dataset.id);
     if (!f || !await confirmBox({ title: `Delete “${f.name}”?`, message: 'The file will be removed from this device.' })) return;
     idbTx((tx) => tx.objectStore('files').delete(f.id)).then(() => renderFiles(f.reviewerId)).catch(writeFailed);
+  },
+
+  /* AI */
+  'ai-save': () => {
+    const key = $('#ai-key').value.trim();
+    const model = $('#ai-model').value.trim();
+    if (!key && !aiCfg.key) return toast('Please paste your Groq key first.');
+    if (key) aiCfg.key = key;
+    if (model) aiCfg.model = model; else delete aiCfg.model;
+    saveAiCfg();
+    toast(key && !key.startsWith('gsk_') ? 'Key saved, but Groq keys usually start with gsk_' : 'Saved. AI is ready');
+    viewData();
+  },
+  'ai-clear': () => { delete aiCfg.key; saveAiCfg(); toast('Key removed'); viewData(); },
+  'ai-test': async (el) => {
+    const label = el.innerHTML;
+    el.disabled = true;
+    el.innerHTML = `${icon('sparkles')}Testing…`;
+    try {
+      await callAi({ mode: 'cards', count: 1, text: 'The mitochondria is the organelle that produces most of a cell’s energy in the form of ATP.' });
+      toast('AI is working');
+    } catch (e) { toast(e.message); }
+    el.disabled = false;
+    el.innerHTML = label;
   },
 
   /* account + sync */

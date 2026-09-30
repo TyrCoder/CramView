@@ -367,6 +367,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .feedback.good { background: var(--good-bg); color: var(--good); }
 .feedback.bad { background: var(--bad-bg); color: var(--bad); }
 .feedback .ans { color: var(--text); font-weight: 600; }
+.feedback .why { color: var(--text); font-weight: 500; font-size: .92rem; opacity: .85; margin-top: 4px; }
+details summary { cursor: pointer; font-weight: 650; font-size: .9rem; padding: 4px 0; }
 #play-body .btn.big { animation: slideUp .5s var(--ease) .12s backwards; flex-direction: row; min-height: 62px; }
 
 .result-hero { text-align: center; padding: 32px 18px; overflow: hidden; background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 12%, var(--surface)), var(--surface) 70%); }

@@ -2,7 +2,7 @@
 
 Plain HTML/CSS/JS. No build step.
 
-Files: `index.html`, `style.css`, `app.js`, `config.js` (generated from `.env`), `scripts/make-config.js`, `manifest.json`, `service-worker.js`, `vercel.json`, `icons/`, `supabase/schema.sql`
+Files: `index.html`, `style.css`, `app.js`, `config.js` (generated from `.env`), `scripts/make-config.js`, `manifest.json`, `service-worker.js`, `vercel.json`, `icons/`, `supabase/schema.sql`, `supabase/functions/generate-quiz/`
 
 ## Run on your PC
 1. Install VS Code, then the **Live Server** extension (Ritwick Dey).
@@ -61,6 +61,20 @@ When you create (or edit) a reviewer you can add PDF, PowerPoint, Word or text f
 To keep generated questions, tap **Auto-generate from notes & files** on a reviewer (also on the Questions and Flashcards pages), review the preview, untick what you don't want, and add them (optionally with flashcards).
 
 It uses simple rules, not AI. It works best when notes are full sentences, `Term: meaning` lines, or a heading followed by bullet lists (for enumeration). Answers are picked automatically, so skim them before relying on them. Enumeration questions need every item listed, in any order.
+
+## AI questions (Groq)
+Quiz Mode, Exam Mode and Auto-generate can use AI (Groq) to write natural questions and flashcards from your notes and files. Pick **AI** as the source on the quiz/exam setup screen, or leave **Use AI** on in the auto-generate window. Every AI question also gets a one-line explanation that shows after you answer. If the AI can't be reached (offline, rate limit, bad key) the app tells you why and uses the offline generator instead, so a quiz always starts.
+
+There are two ways to connect it. The app uses your own key first if you saved one, otherwise your account.
+
+**A. Your own key (easiest, no server).** Get a free key at https://console.groq.com/keys. In the app open the cloud icon (Sync & backup) > **AI questions**, paste the key, tap **Save key**, then **Test AI**. The key is stored only on that device (it is not synced or included in backups) and is sent only to Groq. Do this on each device you use.
+
+**B. Through your account (the key stays on the server).** This works on every device once you are signed in.
+1. Supabase dashboard > **Edge Functions** > **Deploy a new function** > **Via Editor**. Name it exactly `generate-quiz`, paste the contents of `supabase/functions/generate-quiz/index.ts`, and deploy. (With the CLI: `supabase functions deploy generate-quiz --project-ref YOUR_REF`.)
+2. **Project Settings > Edge Functions > Secrets**: add `GROQ_API_KEY` with your Groq key. Optional: `GROQ_MODEL` to change the model (default `llama-3.3-70b-versatile`; if Groq retires it, set a current one here or in the app's Model box).
+3. Sign in in the app. The AI card then says it is using your account. Only signed-in users can call the function, so nobody else can spend your Groq quota.
+
+Groq's free tier has rate limits, so very large quizzes may occasionally fall back to offline.
 
 ## Moving data without an account
 ☁️ (top right) > **Export** on one device, send the file over, **Import** on the other.
