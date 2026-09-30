@@ -17,7 +17,7 @@ const json = (body: unknown, status = 200) =>
 const DEFAULT_MODEL = 'qwen/qwen3.8-27b';
 const TYPES = ['mc', 'tf', 'id', 'enum'];
 const MAX_TEXT = 15000;
-const MAX_COUNT = 20;
+const MAX_COUNT = 25;
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 const str = (v: unknown, max = 600) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -199,6 +199,12 @@ Deno.serve(async (req: Request) => {
   const apiKey = Deno.env.get('GROQ_API_KEY');
   if (!apiKey) return json({ error: 'AI isn’t set up yet (the GROQ_API_KEY secret is missing).' }, 500);
 
+  // Items already written in earlier batches, so this batch adds new ones instead of repeating.
+  const avoid: string[] = (Array.isArray(body?.avoid) ? body.avoid : []).slice(-60).map((a: unknown) => str(a, 140)).filter(Boolean);
+  const avoidBlock = avoid.length
+    ? `\n\nALREADY WRITTEN. Do not repeat, rephrase or test the same fact as any of these:\n${avoid.map((a) => `- ${a}`).join('\n')}`
+    : '';
+
   let system = SYSTEM_QUESTIONS;
   let user = `Write ${count} questions using only these types: ${types.join(', ')}. Mix the types fairly evenly.\n\nSTUDY MATERIAL:\n"""\n${text}\n"""`;
   if (mode === 'cards') {
@@ -211,10 +217,12 @@ Deno.serve(async (req: Request) => {
     user = `Reviewer title: "${str(body?.title, 120)}"\nSubject: "${str(body?.subject, 80)}"\n${parts > 1 ? `This is part ${part} of ${parts} of the file.\n` : ''}\nRAW TEXT FROM THE FILE:\n"""\n${text}\n"""`;
   }
 
+  if (mode !== 'notes') user += avoidBlock;
+
   let res: Response;
   try {
     res = await askGroq(apiKey, [{ role: 'system', content: system }, { role: 'user', content: user }], {
-      json: mode !== 'notes', temperature: mode === 'notes' ? 0.2 : 0.7, maxTokens: mode === 'notes' ? 4096 : 4000,
+      json: mode !== 'notes', temperature: mode === 'notes' ? 0.2 : 0.7, maxTokens: mode === 'notes' ? 4096 : 6000,
     });
   } catch {
     return json({ error: 'Could not reach the AI service.' }, 502);
