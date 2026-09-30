@@ -1,5 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "node scripts/make-config.js",
+  "outputDirectory": ".",
   "headers": [
     {
       "source": "/service-worker.js",
