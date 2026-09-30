@@ -1,4 +1,4 @@
-/* Reviewer Maker — service worker
+/* Cramview — service worker
    Makes the app work offline.
 
    HOW UPDATES WORK
@@ -7,8 +7,8 @@
    - When you change app files, also bump CACHE_VERSION below. The app will
      then show an "Update" button so the new version loads right away.
 */
-const CACHE_VERSION = 'v1.0.0';
-const CACHE_NAME = `reviewer-maker-${CACHE_VERSION}`;
+const CACHE_VERSION = 'v1.0.1';
+const CACHE_NAME = `cramview-${CACHE_VERSION}`;
 
 const APP_SHELL = [
   './',
@@ -37,7 +37,7 @@ self.addEventListener('activate', (event) => {
     caches.keys()
       .then((keys) => Promise.all(
         keys
-          .filter((key) => key.startsWith('reviewer-maker-') && key !== CACHE_NAME)
+          .filter((key) => key.startsWith('cramview-') && key !== CACHE_NAME)
           .map((key) => caches.delete(key))
       ))
       .then(() => self.clients.claim())

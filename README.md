@@ -1,4 +1,4 @@
-# Reviewer Maker (PWA)
+# Cramview (PWA)
 
 Plain HTML/CSS/JS. No build step.
 
@@ -11,10 +11,10 @@ Files: `index.html`, `style.css`, `app.js`, `manifest.json`, `service-worker.js`
    (Opening index.html by double-click works, but offline/install features need http://localhost or https.)
 
 ## Publish on GitHub Pages
-1. Create a GitHub account, then **New repository** (public), e.g. `reviewer-maker`.
+1. Create a GitHub account, then **New repository** (public), e.g. `cramview`.
 2. Upload ALL files and the `icons` folder (**Add file > Upload files**, drag them in, Commit). `index.html` must be at the top level.
 3. **Settings > Pages > Build and deployment**: Source = *Deploy from a branch*, Branch = `main`, folder `/ (root)`, Save.
-4. After ~1 minute your app is at `https://YOUR-USERNAME.github.io/reviewer-maker/`.
+4. After ~1 minute your app is at `https://YOUR-USERNAME.github.io/cramview/`.
 
 ## Install on iPhone
 1. Open that URL in **Safari** (must be Safari).

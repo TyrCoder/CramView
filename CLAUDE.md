@@ -1,4 +1,4 @@
-# Project: Reviewer Maker (PWA)
+# Project: Cramview (PWA)
 
 ## About this project
 - A Progressive Web App built with plain HTML, CSS, and vanilla JavaScript (no frameworks, no build tools).

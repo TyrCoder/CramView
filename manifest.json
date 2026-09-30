@@ -1,7 +1,7 @@
 {
   "id": "./",
-  "name": "Reviewer Maker",
-  "short_name": "Reviewer",
+  "name": "Cramview",
+  "short_name": "Cramview",
   "description": "Make reviewers, quizzes, timed exams and flashcards. Works offline.",
   "start_url": "./",
   "scope": "./",

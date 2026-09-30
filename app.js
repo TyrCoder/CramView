@@ -1,4 +1,4 @@
-/* Reviewer Maker — vanilla JS, no dependencies.
+/* Cramview — vanilla JS, no dependencies.
    Sections: helpers · storage · settings · router · views · play (quiz/exam) · flashcards · backup · boot */
 'use strict';
 
@@ -48,7 +48,7 @@ let useLocalStorage = false;
 
 function openDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open('reviewer-maker', 1);
+    const req = indexedDB.open('cramview', 1);
     req.onupgradeneeded = () => STORES.forEach((s) => req.result.createObjectStore(s, { keyPath: 'id' }));
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -77,7 +77,7 @@ async function loadAll() {
     console.warn('IndexedDB unavailable, using localStorage', err);
     useLocalStorage = true;
     try {
-      const saved = JSON.parse(localStorage.getItem('reviewer-maker-data') || '{}');
+      const saved = JSON.parse(localStorage.getItem('cramview-data') || '{}');
       STORES.forEach((s) => (data[s] = Array.isArray(saved[s]) ? saved[s] : []));
     } catch { /* start empty */ }
   }
@@ -88,7 +88,7 @@ function writeFailed(err) {
   toast('⚠️ Could not save. Storage may be full or blocked.');
 }
 function persistLS() {
-  try { localStorage.setItem('reviewer-maker-data', JSON.stringify(data)); } catch (e) { writeFailed(e); }
+  try { localStorage.setItem('cramview-data', JSON.stringify(data)); } catch (e) { writeFailed(e); }
 }
 /** Insert or update one record. */
 function save(store, obj) {
@@ -137,10 +137,10 @@ const DEFAULT_SETTINGS = {
 };
 let settings = structuredClone(DEFAULT_SETTINGS);
 try {
-  const s = JSON.parse(localStorage.getItem('reviewer-maker-settings') || '{}');
+  const s = JSON.parse(localStorage.getItem('cramview-settings') || '{}');
   for (const k of Object.keys(settings)) Object.assign(settings[k], s[k] || {});
 } catch { /* defaults */ }
-const saveSettings = () => { try { localStorage.setItem('reviewer-maker-settings', JSON.stringify(settings)); } catch { /* ignore */ } };
+const saveSettings = () => { try { localStorage.setItem('cramview-settings', JSON.stringify(settings)); } catch { /* ignore */ } };
 
 /* =====================================================================
    QUESTION LOGIC
@@ -273,7 +273,7 @@ function homeList(query) {
   return list.map(reviewerCard).join('');
 }
 function viewHome() {
-  render(`${topbar('📚 Reviewer Maker', '', `<button class="btn ghost icon" data-act="nav" data-to="/data" aria-label="Backup and settings">💾</button>`)}
+  render(`${topbar('📚 Cramview', '', `<button class="btn ghost icon" data-act="nav" data-to="/data" aria-label="Backup and settings">💾</button>`)}
     <main class="container stack">
       ${data.reviewers.length ? `<input type="search" id="search" placeholder="Search reviewers…" autocomplete="off">` : ''}
       <div id="home-list" class="stack">${homeList('')}</div>
@@ -931,17 +931,17 @@ function viewData() {
         <p class="muted small" style="margin-top:8px">Tip: export a backup once in a while, especially before clearing Safari data or removing the app.</p>
       </div>
       <button class="btn danger block" data-act="wipe">Delete all data</button>
-      <p class="muted small center">Reviewer Maker · works offline</p>
+      <p class="muted small center">Cramview · works offline</p>
     </main>`);
 }
 async function exportData() {
-  const payload = { app: 'reviewer-maker', version: 1, exportedAt: now(), data };
+  const payload = { app: 'cramview', version: 1, exportedAt: now(), data };
   const json = JSON.stringify(payload, null, 2);
-  const name = `reviewer-maker-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  const name = `cramview-backup-${new Date().toISOString().slice(0, 10)}.json`;
   const file = new File([json], name, { type: 'application/json' });
   // On phones, the share sheet is the most reliable way to save a file (esp. iOS home-screen apps)
   if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) && navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'Reviewer Maker backup' }); return toast('Backup ready ✓'); }
+    try { await navigator.share({ files: [file], title: 'Cramview backup' }); return toast('Backup ready ✓'); }
     catch (e) { if (e.name === 'AbortError') return; }
   }
   const url = URL.createObjectURL(file);
@@ -962,7 +962,7 @@ function parseImport(text) {
 async function importFile(file) {
   let incoming;
   try { incoming = parseImport(await file.text()); }
-  catch { return toast('That file is not a valid Reviewer Maker backup.'); }
+  catch { return toast('That file is not a valid Cramview backup.'); }
   const m = openModal(`<h2>Import backup</h2>
     <p class="muted">Found ${plural(incoming.reviewers.length, 'reviewer')}, ${plural(incoming.questions.length, 'question')}, ${plural(incoming.flashcards.length, 'flashcard')}, ${plural(incoming.attempts.length, 'attempt')}.</p>
     <div class="stack" style="margin-top:16px">
