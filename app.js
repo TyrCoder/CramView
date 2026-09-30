@@ -86,7 +86,7 @@ function confetti() {
   if (reduced) return;
   const box = document.createElement('div');
   box.className = 'confetti';
-  const colors = ['#6366f1', '#8b5cf6', '#f43f5e', '#f59e0b', '#10b981', '#0ea5e9'];
+  const colors = ['#f2d14b', '#e86a4a', '#ede6d6', '#e9b93a', '#f5a08a', '#9bd18a'];
   for (let i = 0; i < 46; i++) {
     const p = document.createElement('i');
     p.style.cssText = `left:${Math.random() * 100}%;background:${colors[i % colors.length]};--x:${(Math.random() - .5) * 180}px;--r:${Math.random() * 720}deg;animation-delay:${Math.random() * .4}s;animation-duration:${1.7 + Math.random() * 1.3}s`;
