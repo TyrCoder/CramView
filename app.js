@@ -42,7 +42,7 @@ const MAX_LIVES = 3;
    Everything is kept in memory in `data` and written through on every change.
    ===================================================================== */
 const STORES = ['reviewers', 'questions', 'flashcards', 'attempts'];
-const ALL_STORES = [...STORES, 'tombstones'];
+const ALL_STORES = [...STORES, 'tombstones', 'files'];
 const data = { reviewers: [], questions: [], flashcards: [], attempts: [] };
 let tombs = [];          // deletions not yet synced: { id: 'store:id', store, rid, updatedAt }
 let known = new Set();   // 'store:id' keys present at the last write (used to spot bulk deletions)
@@ -52,7 +52,7 @@ const keyOf = (store, id) => `${store}:${id}`;
 
 function openDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open('cramview', 2);
+    const req = indexedDB.open('cramview', 3);
     req.onupgradeneeded = () => {
       const db = req.result;
       ALL_STORES.forEach((s) => { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: 'id' }); });
@@ -183,6 +183,7 @@ function deleteReviewer(id) {
   data.questions = data.questions.filter((q) => q.reviewerId !== id);
   data.flashcards = data.flashcards.filter((c) => c.reviewerId !== id);
   data.attempts = data.attempts.filter((a) => a.reviewerId !== id);
+  deleteFilesOf(id);
   persistAll();
 }
 
@@ -382,6 +383,13 @@ function viewOverview(r) {
       ${r.notes ? `<div class="notes">${esc(r.notes)}</div>` : `<p class="muted">No notes yet. Tap ✏️ to add your lessons.</p>`}
     </div>
 
+    <div class="row between">
+      <div class="section-title">Files</div>
+      <button class="btn sm" data-act="add-files" style="margin-top:14px">+ Add files</button>
+    </div>
+    <input type="file" id="file-input" multiple class="hidden">
+    <div id="files-list" class="stack"></div>
+
     <div class="section-title">Start</div>
     <div class="btn-grid">
       <button class="btn big primary" data-act="start-setup" data-mode="quiz"><span class="emoji">🎯</span>Quiz Mode</button>
@@ -427,6 +435,7 @@ function viewOverview(r) {
       ${at.length ? at.slice(0, 3).map(attemptRow).join('') : `<div class="card muted center">No attempts yet. Take a quiz or exam!</div>`}
     </div>
   </main>`);
+  renderFiles(r.id);
 }
 
 function viewHistory(r) {
@@ -1054,6 +1063,182 @@ async function importFile(file) {
 }
 
 /* =====================================================================
+   ATTACHED FILES — PDF, PowerPoint, Word, etc. Stored on this device (IndexedDB) next to each reviewer.
+   .docx / .pptx / .txt / .md can also have their text pulled into the reviewer's notes.
+   ===================================================================== */
+const MAX_FILE_MB = 50;
+const fileIcon = (name) => {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  return { pdf: '📕', ppt: '📙', pptx: '📙', doc: '📘', docx: '📘', xls: '📗', xlsx: '📗', txt: '📄', md: '📄' }[ext] || (/^(png|jpe?g|gif|webp|heic)$/.test(ext) ? '🖼️' : '📎');
+};
+const fmtSize = (b) => (b < 1024 * 1024 ? `${Math.max(1, Math.round(b / 1024))} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`);
+let fileUrls = [];
+
+function filesOf(rid) {
+  return new Promise((resolve) => {
+    if (!idb) return resolve([]);
+    const r = idb.transaction('files').objectStore('files').getAll();
+    r.onsuccess = () => resolve(r.result.filter((f) => f.reviewerId === rid).sort((a, b) => a.created - b.created));
+    r.onerror = () => resolve([]);
+  });
+}
+const getFile = (id) => new Promise((resolve) => {
+  if (!idb) return resolve(null);
+  const r = idb.transaction('files').objectStore('files').get(id);
+  r.onsuccess = () => resolve(r.result || null);
+  r.onerror = () => resolve(null);
+});
+function deleteFilesOf(rid) {
+  filesOf(rid).then((fs) => { if (fs.length) idbTx((tx) => fs.forEach((f) => tx.objectStore('files').delete(f.id))).catch(writeFailed); });
+}
+function clearAllFiles() {
+  if (idb) idbTx((tx) => tx.objectStore('files').clear()).catch(writeFailed);
+}
+
+/** Fill the file list on the overview page. Links use real blob URLs so Open/Download work on iPhone too. */
+async function renderFiles(rid) {
+  const box = $('#files-list');
+  if (!box) return;
+  const fs = await filesOf(rid);
+  if (!$('#files-list')) return; // navigated away meanwhile
+  fileUrls.forEach((u) => URL.revokeObjectURL(u));
+  fileUrls = [];
+  if (!fs.length) {
+    box.innerHTML = `<div class="card muted center small">No files yet. Attach your slides, PDFs or documents.</div>`;
+    return;
+  }
+  box.innerHTML = fs.map((f) => {
+    const url = URL.createObjectURL(f.blob);
+    fileUrls.push(url);
+    const ext = f.name.split('.').pop().toLowerCase();
+    const canOpen = ext === 'pdf' || /^(png|jpe?g|gif|webp|txt)$/.test(ext);
+    const canExtract = /^(docx|pptx|txt|md)$/.test(ext);
+    return `<div class="card">
+      <div class="list-item">
+        <span style="font-size:1.8rem" aria-hidden="true">${fileIcon(f.name)}</span>
+        <div class="grow"><div class="ellip" style="font-weight:650">${esc(f.name)}</div><div class="small muted">${fmtSize(f.size)}</div></div>
+      </div>
+      <div class="row wrap" style="margin-top:10px;gap:8px">
+        ${canOpen ? `<a class="btn sm" href="${url}" target="_blank" rel="noopener">Open</a>` : ''}
+        <a class="btn sm" href="${url}" download="${esc(f.name)}">Download</a>
+        ${canExtract ? `<button class="btn sm" data-act="file-extract" data-id="${f.id}">Text → notes</button>` : ''}
+        <button class="btn sm danger" data-act="file-delete" data-id="${f.id}">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function addFiles(fileList, rid) {
+  if (!idb) return toast('File storage isn’t available in this browser mode.');
+  let added = 0;
+  for (const file of fileList) {
+    if (file.size > MAX_FILE_MB * 1024 * 1024) { toast(`“${file.name}” is over ${MAX_FILE_MB} MB.`); continue; }
+    const rec = { id: uid(), reviewerId: rid, name: file.name, type: file.type, size: file.size, blob: file, created: Date.now() + added };
+    try {
+      await idbTx((tx) => tx.objectStore('files').put(rec));
+      added++;
+    } catch (e) { writeFailed(e); break; }
+  }
+  if (added) toast(`Added ${plural(added, 'file')} ✓`);
+  renderFiles(rid);
+}
+
+/* Minimal zip reader (docx/pptx are zip files). Uses the browser's built-in DecompressionStream. */
+async function openZip(blob) {
+  const tailLen = Math.min(blob.size, 65557);
+  const tail = new DataView(await blob.slice(blob.size - tailLen).arrayBuffer());
+  let eocd = -1;
+  for (let i = tailLen - 22; i >= 0; i--) if (tail.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error('This isn’t a .docx/.pptx file (old .doc/.ppt aren’t supported).');
+  const count = tail.getUint16(eocd + 10, true);
+  const cdSize = tail.getUint32(eocd + 12, true);
+  const cdOff = tail.getUint32(eocd + 16, true);
+  const cd = new DataView(await blob.slice(cdOff, cdOff + cdSize).arrayBuffer());
+  const dec = new TextDecoder();
+  const entries = {};
+  for (let n = 0, p = 0; n < count && cd.getUint32(p, true) === 0x02014b50; n++) {
+    const nlen = cd.getUint16(p + 28, true), elen = cd.getUint16(p + 30, true), clen = cd.getUint16(p + 32, true);
+    const name = dec.decode(new Uint8Array(cd.buffer, p + 46, nlen));
+    entries[name] = { method: cd.getUint16(p + 10, true), csize: cd.getUint32(p + 20, true), off: cd.getUint32(p + 42, true) };
+    p += 46 + nlen + elen + clen;
+  }
+  return {
+    names: Object.keys(entries),
+    async text(name) {
+      const e = entries[name];
+      const lh = new DataView(await blob.slice(e.off, e.off + 30).arrayBuffer());
+      const start = e.off + 30 + lh.getUint16(26, true) + lh.getUint16(28, true);
+      const raw = blob.slice(start, start + e.csize);
+      if (e.method === 0) return raw.text();
+      if (e.method !== 8) throw new Error('Unsupported compression in this file.');
+      if (typeof DecompressionStream === 'undefined') throw new Error('This browser can’t unpack the file. Please update it.');
+      return new Response(raw.stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+    },
+  };
+}
+/** Paragraph text from Word/PowerPoint XML (paragraph tag: 'p', text run tag: 't'). */
+function xmlParagraphs(xml) {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  return [...doc.getElementsByTagNameNS('*', 'p')].map((p) => {
+    let s = '';
+    p.querySelectorAll('*').forEach((el) => {
+      if (el.localName === 't') s += el.textContent;
+      else if (el.localName === 'tab') s += '\t';
+      else if (el.localName === 'br') s += '\n';
+    });
+    return s.trim();
+  }).filter(Boolean);
+}
+async function extractText(rec) {
+  const ext = rec.name.split('.').pop().toLowerCase();
+  if (ext === 'txt' || ext === 'md') return (await rec.blob.text()).trim();
+  const zip = await openZip(rec.blob);
+  if (ext === 'docx') {
+    if (!zip.names.includes('word/document.xml')) throw new Error('No text found in this document.');
+    return xmlParagraphs(await zip.text('word/document.xml')).join('\n\n');
+  }
+  if (ext === 'pptx') {
+    const slides = zip.names.filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+      .sort((a, b) => parseInt(a.match(/(\d+)\.xml$/)[1], 10) - parseInt(b.match(/(\d+)\.xml$/)[1], 10));
+    const parts = [];
+    for (let i = 0; i < slides.length; i++) {
+      const lines = xmlParagraphs(await zip.text(slides[i]));
+      if (lines.length) parts.push(`Slide ${i + 1}\n${lines.join('\n')}`);
+    }
+    return parts.join('\n\n');
+  }
+  throw new Error('Text extraction works for .docx, .pptx, .txt and .md files.');
+}
+async function extractToNotes(fileId) {
+  const rec = await getFile(fileId);
+  if (!rec) return;
+  let text;
+  try { text = await extractText(rec); } catch (e) { return toast(e.message || 'Could not read that file.'); }
+  if (!text) return toast('No text found in that file. (Scanned or image-only files can’t be read.)');
+  const preview = text.length > 400 ? `${text.slice(0, 400)}…` : text;
+  const m = openModal(`<h2>Add text to notes?</h2>
+    <p class="muted small">Found ${text.length.toLocaleString()} characters in “${esc(rec.name)}”. It will be added to the end of this reviewer’s notes.</p>
+    <div class="card notes small" style="margin-top:12px;max-height:40dvh;overflow:auto">${esc(preview)}</div>
+    <div class="row" style="margin-top:18px">
+      <button class="btn grow" data-x="no">Cancel</button>
+      <button class="btn primary grow" data-x="yes">Add to notes</button>
+    </div>`);
+  m.addEventListener('click', (e) => {
+    const x = e.target.closest('[data-x]');
+    if (!x) return;
+    closeModal();
+    if (x.dataset.x !== 'yes') return;
+    const r = getReviewer(rec.reviewerId);
+    if (!r) return;
+    r.notes = `${r.notes ? `${r.notes}\n\n` : ''}— ${rec.name} —\n${text}`;
+    r.updated = now();
+    save('reviewers', r);
+    toast('Added to notes ✓');
+    route();
+  });
+}
+
+/* =====================================================================
    SAMPLE DATA
    ===================================================================== */
 function loadSample() {
@@ -1217,6 +1402,15 @@ const ACTIONS = {
   },
   'study-restart': () => { study.deck = buildDeck(study.rid); study.i = 0; renderStudy(); },
 
+  /* files */
+  'add-files': () => $('#file-input').click(),
+  'file-extract': (el) => extractToNotes(el.dataset.id),
+  'file-delete': async (el) => {
+    const f = await getFile(el.dataset.id);
+    if (!f || !await confirmBox({ title: `Delete “${f.name}”?`, message: 'The file will be removed from this device.' })) return;
+    idbTx((tx) => tx.objectStore('files').delete(f.id)).then(() => renderFiles(f.reviewerId)).catch(writeFailed);
+  },
+
   /* account + sync */
   'sign-in': () => doAuth(false),
   'sign-up': () => doAuth(true),
@@ -1227,9 +1421,10 @@ const ACTIONS = {
   export: () => exportData(),
   import: () => $('#import-file').click(),
   wipe: async () => {
-    if (!await confirmBox({ title: 'Delete ALL data?', message: `Every reviewer, question, flashcard and result on this device will be erased${auth ? ', and deleted from your cloud account and other devices too' : ''}. Export a backup first if unsure.`, okText: 'Delete everything' })) return;
+    if (!await confirmBox({ title: 'Delete ALL data?', message: `Every reviewer, question, flashcard, attached file and result on this device will be erased${auth ? ', and deleted from your cloud account and other devices too' : ''}. Export a backup first if unsure.`, okText: 'Delete everything' })) return;
     STORES.forEach((s) => (data[s] = []));
     persistAll();
+    clearAllFiles();
     toast('All data deleted');
     go('/');
     route();
@@ -1246,6 +1441,10 @@ document.addEventListener('input', (e) => {
   if (e.target.id === 'search') $('#home-list').innerHTML = homeList(e.target.value);
 });
 document.addEventListener('change', (e) => {
+  if (e.target.id === 'file-input' && e.target.files.length) {
+    addFiles([...e.target.files], location.hash.split('/')[2]);
+    e.target.value = '';
+  }
   if (e.target.id === 'import-file' && e.target.files[0]) {
     importFile(e.target.files[0]);
     e.target.value = '';

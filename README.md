@@ -49,5 +49,8 @@ Deleting something deletes it everywhere. Signing out keeps the data on that dev
 ## Updating later
 After changing any cached file, bump `CACHE_VERSION` in `service-worker.js` (e.g. `v1.1.1`) and push. The app shows an **Update** banner.
 
+## Attaching files
+On a reviewer's page tap **+ Add files** (PDF, PowerPoint, Word, anything up to 50 MB). Files are kept on the device you add them on: they are **not** included in cloud sync or the JSON export. PDFs and images open in the browser; everything can be downloaded. For `.docx`, `.pptx`, `.txt` and `.md` files, **Text → notes** copies the text into the reviewer's notes (old `.doc`/`.ppt` files, scanned PDFs and PDF text extraction are not supported).
+
 ## Moving data without an account
 ☁️ (top right) > **Export** on one device, send the file over, **Import** on the other.
