@@ -1905,16 +1905,18 @@ async function groqChat(messages, opts) {
   throw aiError(`Groq doesn’t offer any of these models to your account: ${tried.join(', ')}. Type a current Groq model name in the Model box (Sync & backup).`, 404);
 }
 /** Way 1: talk to Groq directly with the key saved on this device. */
+const aiAvoid = (avoid) => (Array.isArray(avoid) && avoid.length
+  ? `\n\nALREADY WRITTEN. Do not repeat, rephrase or test the same fact as any of these:\n${avoid.slice(-60).map((a) => `- ${aiStr(a, 140)}`).join('\n')}` : '');
 async function callGroq(payload) {
-  const { mode, text, count, types } = payload;
+  const { mode, text, count, types, avoid } = payload;
   if (mode === 'notes') {
     const content = await groqChat([{ role: 'system', content: AI_SYSTEM_N }, { role: 'user', content: aiNotesPrompt(payload) }], { json: false, temperature: 0.2, maxTokens: 4096 });
     return { notes: aiCleanNotes(content) };
   }
   const user = mode === 'cards'
-    ? `Make ${count} flashcards from this study material.\n\nSTUDY MATERIAL:\n"""\n${text}\n"""`
-    : `Write ${count} questions using only these types: ${types.join(', ')}. Mix the types fairly evenly.\n\nSTUDY MATERIAL:\n"""\n${text}\n"""`;
-  const content = await groqChat([{ role: 'system', content: mode === 'cards' ? AI_SYSTEM_C : AI_SYSTEM_Q }, { role: 'user', content: user }], { json: true, temperature: 0.7, maxTokens: 4000 });
+    ? `Make ${count} flashcards from this study material.\n\nSTUDY MATERIAL:\n"""\n${text}\n"""${aiAvoid(avoid)}`
+    : `Write ${count} questions using only these types: ${types.join(', ')}. Mix the types fairly evenly.\n\nSTUDY MATERIAL:\n"""\n${text}\n"""${aiAvoid(avoid)}`;
+  const content = await groqChat([{ role: 'system', content: mode === 'cards' ? AI_SYSTEM_C : AI_SYSTEM_Q }, { role: 'user', content: user }], { json: true, temperature: 0.7, maxTokens: 6000 });
   return aiShape(aiParseJson(content), payload);
 }
 /** Way 2: the Supabase function (the Groq key stays on the server). */
@@ -1969,42 +1971,39 @@ function textWindow(text, max) {
 }
 const aiItem = (q) => ({ ...q, card: { front: q.text, back: correctText(q) + (q.explanation ? `\n\n${q.explanation}` : '') } });
 const AI_WINDOW = 6000;
-async function aiQuestions(text, { types, count }) {
+const AI_BATCH = 20; // most items asked for in one request
+/** Ask the AI for `count` items in batches. Each later batch is told what is already written so it adds new ones. */
+async function aiBatches(text, count, ask, { key, avoid, keep }) {
   const out = [];
   const seen = new Set();
-  for (let call = 0; call < 4 && out.length < count; call++) {
-    let res;
+  const maxCalls = Math.ceil(count / AI_BATCH) + 2;
+  for (let call = 0; call < maxCalls && out.length < count; call++) {
+    let batch;
     try {
-      res = await callAi({ mode: 'questions', text: textWindow(text, AI_WINDOW), count: Math.min(count - out.length, 10), types });
+      batch = await ask(Math.min(count - out.length, AI_BATCH), textWindow(text, AI_WINDOW), out.map(avoid).slice(-60));
     } catch (e) {
       if (!out.length) throw e;
       break; // keep what we already have
     }
-    for (const q of res.questions || []) {
-      if (!seen.has(normKey(q.text))) { seen.add(normKey(q.text)); out.push(aiItem(q)); }
+    let added = 0;
+    for (const item of batch) {
+      const k = normKey(key(item));
+      if (!seen.has(k)) { seen.add(k); out.push(keep(item)); added++; }
     }
-    if (text.length <= AI_WINDOW) break; // the whole text was already used
+    if (!added) break; // the material has run out of new things to ask
   }
   return out.slice(0, count);
 }
-async function aiCards(text, count) {
-  const out = [];
-  const seen = new Set();
-  for (let call = 0; call < 4 && out.length < count; call++) {
-    let res;
-    try {
-      res = await callAi({ mode: 'cards', text: textWindow(text, AI_WINDOW), count: Math.min(count - out.length, 15) });
-    } catch (e) {
-      if (!out.length) throw e;
-      break;
-    }
-    for (const c of res.cards || []) {
-      if (!seen.has(normKey(c.front))) { seen.add(normKey(c.front)); out.push({ card: c }); }
-    }
-    if (text.length <= AI_WINDOW) break;
-  }
-  return out.slice(0, count);
-}
+const aiQuestions = (text, { types, count }) => aiBatches(
+  text, count,
+  async (n, window, avoid) => (await callAi({ mode: 'questions', text: window, count: n, types, avoid })).questions || [],
+  { key: (q) => q.text, avoid: (q) => q.text, keep: aiItem },
+);
+const aiCards = (text, count) => aiBatches(
+  text, count,
+  async (n, window, avoid) => (await callAi({ mode: 'cards', text: window, count: n, avoid })).cards || [],
+  { key: (c) => c.front, avoid: (c) => c.card.front, keep: (c) => ({ card: c }) },
+);
 /** Questions for a quiz: AI when chosen and available, otherwise (or if it fails) the offline generator. */
 async function madeQuestions(text, { source, types, count }) {
   if (source === 'ai' || source === 'mixed') {
@@ -2285,6 +2284,7 @@ async function genRegenerate(btn) {
     } catch (e) { toast(`${e.message} Used the offline generator instead.`); }
   }
   gen.ai = !!items;
+  if (items && items.length < gen.count) toast(`The AI wrote ${items.length} of ${gen.count}. Tap Redo for more, or add more notes.`);
   gen.items = items || (gen.mode === 'questions' ? generateQuestions(gen.text, { types: gen.types, count: gen.count }) : generateCardItems(gen.text, gen.count));
   if (btn) { btn.disabled = false; btn.innerHTML = label; }
   renderGenPreview();
