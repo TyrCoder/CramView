@@ -1845,8 +1845,8 @@ function aiModelList() {
 }
 /** Does this Groq error mean "that model isn't available to you"? */
 const aiModelGone = (status, text) => status === 404 || ([400, 403].includes(status) && !/reasoning|response_format|json/i.test(text) && /model/i.test(text) && /(decommission|not found|does not exist|no longer supported|blocked|do not have access|permission)/i.test(text));
-/** How to keep a model's hidden "thinking" short: Qwen can switch it off, gpt-oss can only lower it. */
-const aiReasoningFor = (model) => (/qwen/i.test(model) ? 'none' : /gpt-oss/i.test(model) ? 'low' : null);
+/** Let these models think a little ("low") before answering, which makes questions and cleaned notes more accurate without being slow. Other models get no setting. */
+const aiReasoningFor = (model) => (/qwen|gpt-oss/i.test(model) ? 'low' : null);
 
 /** One chat request to one model. Retries without settings the model rejects (reasoning effort, JSON mode). */
 async function groqChatWith(model, messages, { json, temperature, maxTokens }) {
@@ -1855,10 +1855,11 @@ async function groqChatWith(model, messages, { json, temperature, maxTokens }) {
   const build = () => JSON.stringify({
     model,
     temperature,
-    max_tokens: maxTokens + (/gpt-oss/i.test(model) ? 2000 : 0), // reasoning models spend some of this on thinking
+    max_tokens: maxTokens + (effort ? 2000 : 0), // thinking uses some of this
     messages,
     ...(flags.json ? { response_format: { type: 'json_object' } } : {}),
     ...(flags.reasoning ? { reasoning_effort: effort } : {}),
+    ...(flags.reasoning && /qwen/i.test(model) ? { reasoning_format: 'hidden' } : {}), // keep the thinking out of the reply
   });
   const post = () => withTimeout((signal) => fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST', signal, headers: { Authorization: `Bearer ${aiCfg.key}`, 'Content-Type': 'application/json' }, body: build(),

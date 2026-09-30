@@ -137,8 +137,8 @@ const BACKUP_MODELS = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
 export function isModelUnavailable(status: number, text: string) {
   return status === 404 || ([400, 403].includes(status) && !/reasoning|response_format|json/i.test(text) && /model/i.test(text) && /(decommission|not found|does not exist|no longer supported|blocked|do not have access|permission)/i.test(text));
 }
-/** Keep a model's hidden "thinking" short: Qwen can switch it off, gpt-oss can only lower it. */
-const reasoningFor = (model: string) => (/qwen/i.test(model) ? 'none' : /gpt-oss/i.test(model) ? 'low' : null);
+/** Let these models think a little ("low") before answering: more accurate than none, without being slow. Other models get no setting. */
+const reasoningFor = (model: string) => (/qwen|gpt-oss/i.test(model) ? 'low' : null);
 
 /** One request to one model; retries without settings the model rejects (reasoning effort, JSON mode). */
 async function askModel(apiKey: string, model: string, messages: unknown[], opts: { json: boolean; temperature: number; maxTokens: number }) {
@@ -147,10 +147,11 @@ async function askModel(apiKey: string, model: string, messages: unknown[], opts
   const build = () => JSON.stringify({
     model,
     temperature: opts.temperature,
-    max_tokens: opts.maxTokens + (/gpt-oss/i.test(model) ? 2000 : 0), // reasoning models spend some of this on thinking
+    max_tokens: opts.maxTokens + (effort ? 2000 : 0), // thinking uses some of this
     messages,
     ...(flags.json ? { response_format: { type: 'json_object' } } : {}),
     ...(flags.reasoning ? { reasoning_effort: effort } : {}),
+    ...(flags.reasoning && /qwen/i.test(model) ? { reasoning_format: 'hidden' } : {}), // keep the thinking out of the reply
   });
   let res!: Response;
   for (let attempt = 0; attempt < 3; attempt++) {
