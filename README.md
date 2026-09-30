@@ -71,7 +71,7 @@ There are two ways to connect it. The app uses your own key first if you saved o
 
 **B. Through your account (the key stays on the server).** This works on every device once you are signed in.
 1. Supabase dashboard > **Edge Functions** > **Deploy a new function** > **Via Editor**. Name it exactly `generate-quiz`, paste the contents of `supabase/functions/generate-quiz/index.ts`, and deploy. (With the CLI: `supabase functions deploy generate-quiz --project-ref YOUR_REF`.)
-2. **Project Settings > Edge Functions > Secrets**: add `GROQ_API_KEY` with your Groq key. Optional: `GROQ_MODEL` to change the model (default `qwen/qwen3.8-27b`; if Groq retires it, set a current one here or in the app's Model box).
+2. **Project Settings > Edge Functions > Secrets**: add `GROQ_API_KEY` with your Groq key. Optional: `GROQ_MODEL` to change the model (default `qwen/qwen3.8-27b`). If the chosen model isn't available on your Groq account, the app and the function automatically try `openai/gpt-oss-120b`, then `openai/gpt-oss-20b`, so a retired model doesn't break anything. You can also type any current model name in the app's Model box.
 3. Sign in in the app. The AI card then says it is using your account. Only signed-in users can call the function, so nobody else can spend your Groq quota.
 
 Groq's free tier has rate limits, so very large quizzes may occasionally fall back to offline.

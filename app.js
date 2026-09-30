@@ -1225,7 +1225,8 @@ function aiCard() {
     <label class="field"><span class="label">Your Groq API key</span>
       <input type="password" id="ai-key" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${aiCfg.key ? 'A key is saved on this device' : 'gsk_...'}"></label>
     <details><summary>Model (optional)</summary>
-      <input type="text" id="ai-model" autocomplete="off" autocapitalize="none" spellcheck="false" style="margin-top:8px" value="${esc(aiCfg.model || '')}" placeholder="${AI_DEFAULT_MODEL}"></details>
+      <input type="text" id="ai-model" autocomplete="off" autocapitalize="none" spellcheck="false" style="margin-top:8px" value="${esc(aiCfg.model || '')}" placeholder="${AI_DEFAULT_MODEL}">
+      <p class="muted small" style="margin-top:6px">If this model isn’t available, the app automatically tries ${AI_BACKUP_MODELS.join(', then ')}.</p></details>
     <div class="btn-grid"><button class="btn primary" data-act="ai-save">Save key</button>
       <button class="btn" data-act="ai-test" ${m ? '' : 'disabled'}>Test AI</button></div>
     ${aiCfg.key ? '<button class="btn danger block sm" data-act="ai-clear">Remove my key</button>' : ''}
@@ -1834,34 +1835,74 @@ const aiNotesPrompt = ({ text, title, subject, part, parts }) =>
   `Reviewer title: "${aiStr(title, 120)}"\nSubject: "${aiStr(subject, 80)}"\n${parts > 1 ? `This is part ${part} of ${parts} of the file.\n` : ''}\nRAW TEXT FROM THE FILE:\n"""\n${text}\n"""`;
 const aiError = (message, status, retryAfter) => Object.assign(new Error(message), { status, retryAfter });
 
-/** One chat request to Groq. Qwen3 "thinks" by default (slow, and it eats the rate limit), so ask it not to; retry without if the model rejects that. */
-async function groqChat(messages, { json, temperature, maxTokens }) {
-  const model = aiCfg.model || AI_DEFAULT_MODEL;
-  const build = (reasoning) => JSON.stringify({
+/** Extra models to try, in order, if the chosen one isn't available on the account (Groq retires models now and then). */
+const AI_BACKUP_MODELS = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
+let aiModelInUse = null; // the model that last worked (remembered until the page is reloaded or the Model box changes)
+const aiPrimaryModel = () => aiCfg.model || AI_DEFAULT_MODEL;
+function aiModelList() {
+  const list = [aiPrimaryModel(), ...AI_BACKUP_MODELS.filter((m) => m !== aiPrimaryModel())];
+  return aiModelInUse && list.includes(aiModelInUse) ? [aiModelInUse, ...list.filter((m) => m !== aiModelInUse)] : list;
+}
+/** Does this Groq error mean "that model isn't available to you"? */
+const aiModelGone = (status, text) => status === 404 || ([400, 403].includes(status) && !/reasoning|response_format|json/i.test(text) && /model/i.test(text) && /(decommission|not found|does not exist|no longer supported|blocked|do not have access|permission)/i.test(text));
+/** How to keep a model's hidden "thinking" short: Qwen can switch it off, gpt-oss can only lower it. */
+const aiReasoningFor = (model) => (/qwen/i.test(model) ? 'none' : /gpt-oss/i.test(model) ? 'low' : null);
+
+/** One chat request to one model. Retries without settings the model rejects (reasoning effort, JSON mode). */
+async function groqChatWith(model, messages, { json, temperature, maxTokens }) {
+  const effort = aiReasoningFor(model);
+  const flags = { reasoning: !!effort, json };
+  const build = () => JSON.stringify({
     model,
     temperature,
-    max_tokens: maxTokens,
+    max_tokens: maxTokens + (/gpt-oss/i.test(model) ? 2000 : 0), // reasoning models spend some of this on thinking
     messages,
-    ...(json ? { response_format: { type: 'json_object' } } : {}),
-    ...(reasoning && /qwen/i.test(model) ? { reasoning_effort: 'none' } : {}),
+    ...(flags.json ? { response_format: { type: 'json_object' } } : {}),
+    ...(flags.reasoning ? { reasoning_effort: effort } : {}),
   });
-  const post = (body) => withTimeout((signal) => fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST', signal, headers: { Authorization: `Bearer ${aiCfg.key}`, 'Content-Type': 'application/json' }, body,
+  const post = () => withTimeout((signal) => fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST', signal, headers: { Authorization: `Bearer ${aiCfg.key}`, 'Content-Type': 'application/json' }, body: build(),
   }), 60000);
   let res;
   try {
-    res = await post(build(true));
-    if (res.status === 400 && /reasoning/i.test(await res.clone().text())) res = await post(build(false));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      res = await post();
+      if (res.status !== 400) break;
+      const text = await res.clone().text();
+      if (aiModelGone(400, text)) break;
+      if (flags.reasoning && /reasoning/i.test(text)) flags.reasoning = false;
+      else if (flags.json && /response_format|json/i.test(text)) flags.json = false;
+      else break;
+    }
   } catch (e) { throw aiNetworkError(e); }
   if (res.status === 401) throw aiError('Groq rejected your API key. Check it in Sync & backup.', 401);
   if (res.status === 429) throw aiError('Groq is busy, or your limit was reached. Try again in a minute.', 429, Number(res.headers.get('retry-after')) || undefined);
-  if (res.status === 404) throw aiError(`Groq doesn’t offer the model “${model}” to your account. Type a current Groq model name in the Model box (Sync & backup).`, 404);
   if (!res.ok) {
     let detail = '';
-    try { detail = (await res.json())?.error?.message || ''; } catch { /* no body */ }
-    throw aiError(`Groq returned an error (${res.status}). ${detail.slice(0, 120)}`.trim(), res.status);
+    try { detail = await res.clone().text(); } catch { /* no body */ }
+    if (aiModelGone(res.status, detail)) throw Object.assign(aiError(`Groq doesn’t offer “${model}” to your account.`, 404), { modelGone: true });
+    let msg = detail;
+    try { msg = JSON.parse(detail)?.error?.message || detail; } catch { /* plain text */ }
+    throw aiError(`Groq returned an error (${res.status}). ${String(msg).slice(0, 120)}`.trim(), res.status);
   }
   try { return (await res.json())?.choices?.[0]?.message?.content ?? ''; } catch { throw new Error('The AI sent back something unreadable. Try again.'); }
+}
+/** Chat with the chosen model; if it isn't available, fall back to the backup models. */
+async function groqChat(messages, opts) {
+  const primary = aiPrimaryModel();
+  const tried = [];
+  for (const model of aiModelList()) {
+    try {
+      const out = await groqChatWith(model, messages, opts);
+      if (model !== primary && aiModelInUse !== model) toast(`“${primary}” isn’t available, so the AI is using ${model} instead.`);
+      aiModelInUse = model;
+      return out;
+    } catch (e) {
+      if (!e.modelGone) throw e;
+      tried.push(model);
+    }
+  }
+  throw aiError(`Groq doesn’t offer any of these models to your account: ${tried.join(', ')}. Type a current Groq model name in the Model box (Sync & backup).`, 404);
 }
 /** Way 1: talk to Groq directly with the key saved on this device. */
 async function callGroq(payload) {
@@ -2566,6 +2607,7 @@ const ACTIONS = {
     if (!key && !aiCfg.key) return toast('Please paste your Groq key first.');
     if (key) aiCfg.key = key;
     if (model) aiCfg.model = model; else delete aiCfg.model;
+    aiModelInUse = null;
     saveAiCfg();
     toast(key && !key.startsWith('gsk_') ? 'Key saved, but Groq keys usually start with gsk_' : 'Saved. AI is ready');
     viewData();
