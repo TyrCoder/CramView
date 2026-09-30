@@ -280,6 +280,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 @keyframes grow { from { transform: scaleX(0); } }
 
 .notes { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; }
+.notes-box { position: relative; overflow: hidden; transition: max-height .5s var(--ease); }
+.notes-box.collapsed { max-height: 9rem; }
+.notes-box::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 4.5rem; opacity: 0; pointer-events: none; transition: opacity .3s; background: linear-gradient(to bottom, transparent, var(--surface)); }
+.notes-box.collapsed::after { opacity: 1; }
 
 /* ---------- Lists ---------- */
 .list-item { display: flex; align-items: center; gap: 12px; }

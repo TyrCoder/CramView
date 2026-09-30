@@ -46,6 +46,8 @@ const ICONS = {
   'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
   'arrow-right': '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
   'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+  'chevron-down': '<path d="m6 9 6 6 6-6"/>',
+  'chevron-up': '<path d="m18 15-6-6-6 6"/>',
   rotate: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
   shuffle: '<path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/><path d="m18 14 4 4-4 4"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
@@ -482,6 +484,7 @@ function attemptRow(a) {
   </div>`;
 }
 function viewOverview(r) {
+  const longNotes = (r.notes || '').length > 350 || (r.notes || '').split('\n').length > 6;
   const qs = qsOf(r.id);
   const count = (t) => qs.filter((q) => q.type === t).length;
   const cards = cardsOf(r.id);
@@ -502,7 +505,9 @@ function viewOverview(r) {
         ${r.subject ? `<span class="badge primary" style="margin-top:6px">${esc(r.subject)}</span>` : ''}
       </div>
       <div class="section-title" style="margin:6px 0 0">Notes &amp; lessons</div>
-      ${r.notes ? `<div class="notes">${esc(r.notes)}</div>` : `<p class="muted">No notes yet. Tap the edit button to add your lessons.</p>`}
+      ${r.notes ? `<div class="notes-box ${longNotes ? 'collapsed' : ''}" id="notes-box"><div class="notes">${esc(r.notes)}</div></div>
+        ${longNotes ? `<button class="btn sm block" data-act="toggle-notes" id="notes-toggle">${icon('chevron-down')}Show notes <span class="muted small">(${r.notes.length.toLocaleString()} characters)</span></button>` : ''}`
+        : `<p class="muted">No notes yet. Tap the edit button to add your lessons.</p>`}
     </div>
 
     <div class="row between">
@@ -2708,6 +2713,23 @@ const ACTIONS = {
     const f = await getFile(el.dataset.id);
     if (!f || !await confirmBox({ title: `Delete “${f.name}”?`, message: 'The file will be removed from this device.' })) return;
     idbTx((tx) => tx.objectStore('files').delete(f.id)).then(() => renderFiles(f.reviewerId)).catch(writeFailed);
+  },
+
+  /* notes */
+  'toggle-notes': (el) => {
+    const box = $('#notes-box');
+    const opening = box.classList.contains('collapsed');
+    if (opening) {
+      box.classList.remove('collapsed');
+      box.style.maxHeight = `${box.scrollHeight}px`;
+      setTimeout(() => { if (!box.classList.contains('collapsed')) box.style.maxHeight = 'none'; }, 500);
+    } else {
+      box.style.maxHeight = `${box.scrollHeight}px`; // start the close from the real height so it animates
+      void box.offsetHeight;
+      box.classList.add('collapsed');
+      box.style.maxHeight = '';
+    }
+    el.innerHTML = `${icon(opening ? 'chevron-up' : 'chevron-down')}${opening ? 'Hide notes' : 'Show notes'} <span class="muted small">(${(getReviewer(location.hash.split('/')[2])?.notes || '').length.toLocaleString()} characters)</span>`;
   },
 
   /* AI */
