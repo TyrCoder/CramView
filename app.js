@@ -1498,39 +1498,143 @@ function loadPdfJs() {
   }
   return pdfjsLoading;
 }
-/** Turn one page's text pieces into clean lines. */
-function pageLines(items) {
-  const lines = [];
-  let cur = '';
-  let lastY = null;
-  for (const it of items) {
-    if (typeof it.str !== 'string') continue;
-    const y = it.transform ? it.transform[5] : 0;
-    if (lastY !== null && Math.abs(y - lastY) > (it.height || 10) * 0.6 && cur.trim()) { lines.push(cur); cur = ''; }
-    cur += it.str;
-    lastY = y;
-    if (it.hasEOL) { lines.push(cur); cur = ''; lastY = null; }
-  }
-  if (cur.trim()) lines.push(cur);
-  return lines.map((l) => l.replace(/\s+/g, ' ').trim().replace(/^[\uF000-\uF8FF•●▪◦‣▸►■□]\s*/, '• ')).filter(Boolean);
-}
-/** Drop page numbers and repeated headers/footers, and re-join sentences that wrapped onto the next line. */
-function tidyPdfPages(pages) {
-  const counts = new Map();
-  pages.forEach((lines) => new Set(lines).forEach((l) => counts.set(l, (counts.get(l) || 0) + 1)));
-  const repeated = (l) => pages.length >= 4 && l.length < 90 && counts.get(l) >= Math.max(3, pages.length * 0.6);
-  const out = [];
-  pages.forEach((lines) => {
-    const merged = [];
-    lines.filter((l) => !/^(page\s*)?\d{1,4}(\s*(of|\/)\s*\d{1,4})?$/i.test(l) && !repeated(l)).forEach((l) => {
-      const prev = merged[merged.length - 1];
-      if (prev !== undefined && prev.length > 35 && /^[a-z(]/.test(l) && !/[.!?:;]$/.test(prev)) {
-        merged[merged.length - 1] = /[a-z]-$/.test(prev) ? prev.slice(0, -1) + l : `${prev} ${l}`;
-      } else merged.push(l);
-    });
-    if (merged.length) out.push(merged.join('\n'));
+/* ---- PDF layout: positioned text pieces -> clean lines, in reading order ---- */
+const PDF_LIGATURES = { 'ﬀ': 'ff', 'ﬁ': 'fi', 'ﬂ': 'fl', 'ﬃ': 'ffi', 'ﬄ': 'ffl', 'ﬅ': 'st', 'ﬆ': 'st' };
+const cleanGlyphs = (s) => s.replace(/[ﬀ-ﬆ]/g, (c) => PDF_LIGATURES[c]).replace(/[­​-‍﻿]/g, '').replace(/ /g, ' ');
+// bullet-like characters at the start of a line (including the private-use glyphs Word/PowerPoint exports use)
+const PDF_BULLET = /^[-•●▪◦‣▸►■□○◆◇➢➤✓✔▶]+\s*/;
+
+/** Find the empty vertical strip between two columns of prose, or null (single column, or a table). */
+function findGutter(pieces, pageW) {
+  if (pieces.length < 8) return null;
+  const BINS = 200; // fine enough to catch a gutter of ~2% of the page width (about 12 pt)
+  const cover = new Array(BINS).fill(0);
+  pieces.forEach((p) => {
+    const a = Math.max(0, Math.floor((p.x / pageW) * BINS));
+    const b = Math.min(BINS - 1, Math.floor(((p.x + p.w) / pageW) * BINS));
+    for (let i = a; i <= b; i++) cover[i]++;
   });
-  return out.join('\n\n');
+  const lo = Math.floor(BINS * 0.3);
+  const hi = Math.ceil(BINS * 0.7);
+  const limit = Math.max(1, pieces.length * 0.02);
+  let best = null;
+  for (let i = lo; i <= hi;) {
+    if (cover[i] > limit) { i++; continue; }
+    let j = i;
+    while (j + 1 <= hi && cover[j + 1] <= limit) j++;
+    if (j - i + 1 >= 4 && (!best || j - i > best[1] - best[0])) best = [i, j];
+    i = j + 1;
+  }
+  if (!best) return null;
+  const gx = (((best[0] + best[1] + 1) / 2) / BINS) * pageW;
+  const side = (pick) => pieces.filter((p) => pick(p.x + p.w / 2)).map((p) => p.w).sort((a, b) => a - b);
+  const left = side((c) => c < gx);
+  const right = side((c) => c >= gx);
+  if (left.length < 3 || right.length < 3) return null;
+  // prose columns have long lines on both sides; a table has short cells on at least one side
+  const wide = (ws) => ws[Math.floor(ws.length * 0.75)] >= pageW * 0.24;
+  return wide(left) && wide(right) ? gx : null;
+}
+/** Join the pieces of one visual row into text, adding spaces where there is a gap and splitting into cells at big gaps. */
+function rowCells(items, body) {
+  items.sort((a, b) => a.x - b.x);
+  const cells = [];
+  let cur = '';
+  let end = null;
+  items.forEach((p) => {
+    if (end !== null) {
+      const gap = p.x - end;
+      if (gap > body * 2.5) { cells.push(cur.trim()); cur = ''; }
+      else if (gap > body * 0.18 && !/\s$/.test(cur) && !/^\s/.test(p.s)) cur += ' ';
+    }
+    cur += p.s;
+    end = end === null ? p.x + p.w : Math.max(end, p.x + p.w);
+  });
+  cells.push(cur.trim());
+  return cells.filter(Boolean);
+}
+function cellsToText(cells) {
+  if (cells.length === 2 && cells[0].split(/\s+/).length <= 6 && cells[1].length > 2) return `${cells[0]} – ${cells[1]}`; // "Term – meaning"
+  return cells.join(' | ');
+}
+/** One page -> lines [{ text, y, h, yFrac, heading }] in reading order. */
+function pageLines(items, pageW, pageH) {
+  const pieces = items.filter((it) => typeof it.str === 'string' && it.str.trim() && it.transform).map((it) => ({
+    s: cleanGlyphs(it.str), x: it.transform[4], y: it.transform[5], w: it.width || 0, h: Math.abs(it.height) || Math.abs(it.transform[3]) || 10,
+  }));
+  if (!pieces.length) return [];
+  const hs = pieces.map((p) => p.h).sort((a, b) => a - b);
+  const body = hs[Math.floor(hs.length / 2)] || 10;
+  // group pieces into visual rows, top to bottom
+  const rows = [];
+  pieces.slice().sort((a, b) => b.y - a.y || a.x - b.x).forEach((p) => {
+    const row = rows[rows.length - 1];
+    if (row && Math.abs(row.y - p.y) <= Math.max(2, row.h * 0.45)) { row.items.push(p); row.h = Math.max(row.h, p.h); } else rows.push({ y: p.y, h: p.h, items: [p] });
+  });
+  const gx = findGutter(pieces, pageW);
+  const edgeRow = (y) => y / pageH > 0.92 || y / pageH < 0.07; // running header / footer area
+  const mk = (its, y, h) => {
+    let cells = rowCells(its, body);
+    if (edgeRow(y)) cells = cells.filter((c) => !/^(page\s*)?\d{1,4}(\s*(of|\/)\s*\d{1,4})?$/i.test(c)); // page numbers
+    const text = cellsToText(cells).replace(PDF_BULLET, '• ').replace(/\s+/g, ' ').trim();
+    if (!text || (text.length === 1 && !/[A-Za-z0-9]/.test(text))) return null;
+    return { text, y, h, yFrac: y / pageH, heading: h >= body * 1.18 && text.length <= 120 && !/[.!?]$/.test(text), x: Math.min(...its.map((p) => p.x)) };
+  };
+  const lines = [];
+  if (gx === null) {
+    rows.forEach((r) => { const l = mk(r.items, r.y, r.h); if (l) lines.push(l); });
+    return lines;
+  }
+  // two columns: read the left column, then the right, with full-width lines as dividers
+  let L = [];
+  let R = [];
+  const flush = () => { lines.push(...L, ...R); L = []; R = []; };
+  rows.forEach((r) => {
+    if (edgeRow(r.y) || r.items.some((p) => p.x < gx && p.x + p.w > gx)) { const l = mk(r.items, r.y, r.h); if (l) { flush(); lines.push(l); } return; }
+    const l = mk(r.items.filter((p) => p.x + p.w / 2 < gx), r.y, r.h);
+    const rr = mk(r.items.filter((p) => p.x + p.w / 2 >= gx), r.y, r.h);
+    if (l) L.push(l);
+    if (rr) R.push(rr);
+  });
+  flush();
+  return lines;
+}
+/** Lines of one page -> text: blank lines around headings and between paragraphs, wrapped lines re-joined. */
+function assemblePage(lines) {
+  const out = [];
+  let prev = null;
+  lines.forEach((ln) => {
+    let blank = false;
+    if (prev) {
+      const dy = prev.y - ln.y;
+      const bullet = /^• /.test(ln.text);
+      blank = ln.heading || prev.heading || dy <= 0 || dy > prev.h * 2.1;
+      const wraps = !blank && !bullet && dy <= prev.h * 1.75
+        && ((prev.text.length > 28 && /^[a-z(“"']/.test(ln.text)) || /[a-z]-$/.test(prev.text));
+      if (wraps) {
+        out[out.length - 1] = /[a-z]-$/.test(prev.text) && /^[a-z]/.test(ln.text) ? out[out.length - 1].slice(0, -1) + ln.text : `${out[out.length - 1]} ${ln.text}`;
+        prev = { ...ln };
+        return;
+      }
+    }
+    if (blank && out.length) out.push('');
+    out.push(ln.text);
+    prev = ln;
+  });
+  return out.join('\n');
+}
+/** All pages -> text. Drops page numbers and the running header/footer (same text near the top/bottom of most pages). */
+function tidyPdfPages(pages) {
+  const norm = (l) => normKey(l.text).replace(/\d+/g, '#');
+  const isEdge = (l) => l.yFrac > 0.92 || l.yFrac < 0.07;
+  const count = new Map();
+  pages.forEach((lines) => new Set(lines.filter(isEdge).map(norm)).forEach((k) => count.set(k, (count.get(k) || 0) + 1)));
+  const runsOften = (l) => pages.length >= 2 && isEdge(l) && count.get(norm(l)) >= Math.max(2, Math.ceil(pages.length * 0.5));
+  const anywhere = new Map();
+  pages.forEach((lines) => new Set(lines.map(norm)).forEach((k) => anywhere.set(k, (anywhere.get(k) || 0) + 1)));
+  const repeated = (l) => pages.length >= 4 && l.text.length < 90 && anywhere.get(norm(l)) >= Math.max(3, pages.length * 0.6);
+  const pageNo = (l) => /^page\s*\d+/i.test(l.text) || (isEdge(l) && /^\d{1,4}(\s*(of|\/)\s*\d{1,4})?$/.test(l.text));
+  return pages.map((lines) => assemblePage(lines.filter((l) => !pageNo(l) && !runsOften(l) && !repeated(l)))).filter(Boolean).join('\n\n');
 }
 async function extractPdfText(blob) {
   const lib = await loadPdfJs();
@@ -1542,7 +1646,12 @@ async function extractPdfText(blob) {
   }
   const pages = [];
   try {
-    for (let p = 1; p <= pdf.numPages; p++) pages.push(pageLines((await (await pdf.getPage(p)).getTextContent()).items));
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const vp = page.getViewport({ scale: 1 });
+      // don't let PDF.js merge neighbouring pieces: columns and table cells must stay separate for the layout step
+      pages.push(pageLines((await page.getTextContent({ disableCombineTextItems: true })).items, vp.width, vp.height));
+    }
   } finally { pdf.destroy(); }
   return tidyPdfPages(pages);
 }
@@ -1683,7 +1792,7 @@ async function extractToNotes(fileId) {
     }
   } catch (e) { closeModal(); return toast(e.message || 'Could not read that file.'); }
   if (!text) { closeModal(); return toast('No text found in that file. (Scanned or image-only files can’t be read.)'); }
-  const preview = text.length > 400 ? `${text.slice(0, 400)}…` : text;
+  const preview = text.length > 3000 ? `${text.slice(0, 3000)}…` : text;
   const m = openModal(`<h2>Add lessons to notes?</h2>
     <p class="muted small">${ai ? 'The AI kept only the lessons. ' : ''}Found ${text.length.toLocaleString()} characters in “${esc(rec.name)}”. They will be added to the end of this reviewer’s notes.</p>
     <div class="card notes small" style="margin-top:12px;max-height:40dvh;overflow:auto">${esc(preview)}</div>
