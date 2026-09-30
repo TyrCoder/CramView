@@ -135,8 +135,9 @@ function toast(msg) {
   setTimeout(() => el.remove(), 2750);
 }
 
-const TYPE_LABEL = { mc: 'Multiple choice', tf: 'True / False', id: 'Identification' };
-const TYPE_SHORT = { mc: 'MC', tf: 'T/F', id: 'ID' };
+const TYPE_LABEL = { mc: 'Multiple choice', tf: 'True / False', id: 'Identification', enum: 'Enumeration' };
+const TYPE_SHORT = { mc: 'MC', tf: 'T/F', id: 'ID', enum: 'EN' };
+const ALL_TYPES = ['mc', 'tf', 'id', 'enum'];
 const MAX_LIVES = 3;
 
 /* =====================================================================
@@ -293,8 +294,8 @@ function deleteReviewer(id) {
    SETTINGS (remembered toggles) — per-device convenience only
    ===================================================================== */
 const DEFAULT_SETTINGS = {
-  quiz: { shuffleQ: true, shuffleC: true, lives: true },
-  exam: { count: 10, minutes: 10, shuffle: true, lives: true },
+  quiz: { shuffleQ: true, shuffleC: true, lives: true, source: 'auto', types: ALL_TYPES, count: 10 },
+  exam: { count: 10, minutes: 10, shuffle: true, lives: true, source: 'auto', types: ALL_TYPES },
   study: { shuffle: false, onlyLearning: false },
 };
 let settings = structuredClone(DEFAULT_SETTINGS);
@@ -313,9 +314,19 @@ function checkIdentification(q, typed) {
   if (!t) return false;
   return String(q.answer).split('|').map(normText).filter(Boolean).includes(t);
 }
+const enumNorm = (s) => normText(s).replace(/^(the|a|an)\s+/, '');
+const enumItems = (q) => (Array.isArray(q.answer) ? q.answer : String(q.answer).split(/\n|;|\|/)).map((x) => String(x).trim()).filter(Boolean);
+/** Enumeration: every required item must appear (any order, case/spacing ignored). */
+function checkEnumeration(q, typed) {
+  const parts = String(typed).split(/\n|;|,/).map(enumNorm).filter(Boolean);
+  const got = new Set(parts.concat(parts.flatMap((p) => p.split(/\s+and\s+/))));
+  const want = enumItems(q).map(enumNorm);
+  return want.length > 0 && want.every((w) => got.has(w));
+}
 function correctText(q) {
   if (q.type === 'mc') return q.choices[q.answer];
   if (q.type === 'tf') return q.answer ? 'True' : 'False';
+  if (q.type === 'enum') return enumItems(q).join(', ');
   return String(q.answer).split('|').map((s) => s.trim()).filter(Boolean).join('  /  ');
 }
 
@@ -507,6 +518,7 @@ function viewOverview(r) {
       <button class="btn big" data-act="nav" data-to="/r/${r.id}/questions"><span class="big-ic">${icon('file-text')}</span>Edit Questions</button>
     </div>
     <button class="btn block" style="margin-top:10px" data-act="nav" data-to="/r/${r.id}/cards">${icon('edit')}Edit Flashcards</button>
+    <button class="btn block" style="margin-top:10px" data-act="gen-open" data-rid="${r.id}" data-mode="questions">${icon('sparkles')}Auto-generate from notes &amp; files</button>
 
     <div class="section-title">Questions</div>
     <div class="stats">
@@ -514,6 +526,7 @@ function viewOverview(r) {
       <div class="stat"><b>${count('mc')}</b><span>Multiple choice</span></div>
       <div class="stat"><b>${count('tf')}</b><span>True / False</span></div>
       <div class="stat"><b>${count('id')}</b><span>Identification</span></div>
+      <div class="stat"><b>${count('enum')}</b><span>Enumeration</span></div>
       <div class="stat"><b>${cards.length}</b><span>Flashcards</span></div>
     </div>
 
@@ -579,6 +592,7 @@ function viewQuestions(r) {
   const qs = qsOf(r.id);
   render(`${topbar('Questions', `/r/${r.id}`, `<span class="badge">${qs.length}</span>`)}
     <main class="container stack">
+      <button class="btn block" data-act="gen-open" data-rid="${r.id}" data-mode="questions">${icon('sparkles')}Auto-generate questions</button>
       ${qs.length ? qs.map((q, i) => `<div class="card">
         <div class="row between">
           <span class="badge primary">${i + 1} · ${TYPE_LABEL[q.type]}</span>
@@ -602,7 +616,7 @@ function questionForm(rid, q) {
   const tf = q?.type === 'tf' ? q.answer : true;
   openModal(`<h2>${q ? 'Edit question' : 'New question'}</h2>
     <div class="seg" id="q-seg">
-      ${['mc', 'tf', 'id'].map((t) => `<button type="button" data-act="q-type" data-t="${t}" class="${qForm.type === t ? 'on' : ''}">${TYPE_SHORT[t]}</button>`).join('')}
+      ${ALL_TYPES.map((t) => `<button type="button" data-act="q-type" data-t="${t}" class="${qForm.type === t ? 'on' : ''}">${TYPE_SHORT[t]}</button>`).join('')}
     </div>
     <p class="small muted center" id="q-type-label" style="margin:6px 0 12px">${TYPE_LABEL[qForm.type]}</p>
     <label class="field"><span class="label">Question</span><textarea id="q-text" style="min-height:90px" placeholder="Type the question…">${esc(q?.text || '')}</textarea></label>
@@ -629,6 +643,12 @@ function questionForm(rid, q) {
       <span class="small muted">Capitalization and extra spaces are ignored. Accept several answers by separating them with <b>|</b> (e.g. <i>USA | United States</i>).</span>
     </label>
 
+    <label id="sec-enum" class="field ${qForm.type === 'enum' ? '' : 'hidden'}">
+      <span class="label">Correct items (one per line)</span>
+      <textarea id="q-enum" style="min-height:110px" placeholder="Red&#10;Blue&#10;Yellow">${q?.type === 'enum' ? esc(enumItems(q).join('\n')) : ''}</textarea>
+      <span class="small muted">The student must list every item, in any order. Capitalization and extra spaces are ignored.</span>
+    </label>
+
     <div class="row" style="margin-top:18px">
       <button class="btn grow" data-act="close-modal">Cancel</button>
       <button class="btn primary grow" data-act="save-question" data-more="0">Save</button>
@@ -648,6 +668,9 @@ function saveQuestion(more) {
     q.answer = Number($('input[name="q-correct"]:checked', m).value);
   } else if (q.type === 'tf') {
     q.answer = $('#tf-seg .on', m).dataset.v === 'true';
+  } else if (q.type === 'enum') {
+    q.answer = $('#q-enum', m).value.split(/\n|;/).map((x) => x.trim()).filter(Boolean);
+    if (q.answer.length < 2) return toast('Please list at least 2 items, one per line.');
   } else {
     q.answer = $('#q-ans', m).value.trim();
     if (!q.answer) return toast('Please type the correct answer.');
@@ -671,13 +694,36 @@ function toggleRow(id, title, sub, on) {
   return `<label class="toggle"><span class="t-text"><b>${title}</b><span class="small muted">${sub}</span></span>
     <span class="switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><i></i></span></label>`;
 }
+const SRC_LABEL = [['generated', 'Random'], ['saved', 'Saved'], ['mixed', 'Mixed']];
+const SRC_HINT = {
+  generated: 'A fresh random set made from your notes and attached files every time you start.',
+  saved: 'Only the questions you wrote or saved in this reviewer.',
+  mixed: 'Some of your saved questions plus fresh random ones.',
+};
+function questionSourceCard(src, types, count, max) {
+  return `<div class="section-title">Questions</div>
+    <div class="card stack">
+      <div class="seg" id="o-src">${SRC_LABEL.map(([v, l]) => `<button type="button" data-act="src-pick" data-v="${v}" class="${v === src ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <p class="small muted" id="o-src-hint">${SRC_HINT[src]}</p>
+      <div>
+        <span style="display:block;font-weight:650;font-size:.9rem;margin-bottom:8px">Question types <span class="muted" style="font-weight:500">(pick one or more)</span></span>
+        <div class="row wrap" id="o-types" style="gap:8px">${ALL_TYPES.map((t) => `<button type="button" class="chip ${types.includes(t) ? 'on' : ''}" data-act="type-pick" data-t="${t}">${icon('check')}${TYPE_LABEL[t]}</button>`).join('')}</div>
+      </div>
+      <label class="field"><span class="label">Number of questions (1–${max})</span>
+        <input type="number" id="o-count" inputmode="numeric" min="1" max="${max}" value="${count}"></label>
+    </div>`;
+}
+function defaultSource(r, s, saved) {
+  if (s.source && s.source !== 'auto') return s.source;
+  return (r.notes || '').length > 40 || !saved ? 'generated' : 'saved';
+}
 function viewQuizSetup(r) {
-  const total = qsOf(r.id).length;
-  if (!total) { toast('Add some questions first.'); return go(`/r/${r.id}/questions`); }
+  const saved = qsOf(r.id).length;
   const s = settings.quiz;
   render(`${topbar('Quiz Mode', `/r/${r.id}`)}
     <main class="container stack">
-      <div class="card"><div class="card-title">${esc(r.title)}</div><div class="muted small">${plural(total, 'question')} · answers are shown right after each question</div></div>
+      <div class="card"><div class="card-title">${esc(r.title)}</div><div class="muted small">${plural(saved, 'saved question')} · answers are shown right after each question</div></div>
+      ${questionSourceCard(defaultSource(r, s, saved), s.types, clamp(s.count || 10, 1, 100), 100)}
       <div class="card">
         ${toggleRow('o-shufq', 'Shuffle questions', 'Random order each time', s.shuffleQ)}
         ${toggleRow('o-shufc', 'Shuffle choices', 'Mixes up multiple-choice options', s.shuffleC)}
@@ -687,16 +733,13 @@ function viewQuizSetup(r) {
     </main>`);
 }
 function viewExamSetup(r) {
-  const total = qsOf(r.id).length;
-  if (!total) { toast('Add some questions first.'); return go(`/r/${r.id}/questions`); }
+  const saved = qsOf(r.id).length;
   const s = settings.exam;
-  const n = clamp(s.count, 1, total);
   render(`${topbar('Exam Mode', `/r/${r.id}`)}
     <main class="container stack">
-      <div class="card"><div class="card-title">${esc(r.title)}</div><div class="muted small">${plural(total, 'question')} available · correct answers are revealed only at the end</div></div>
+      <div class="card"><div class="card-title">${esc(r.title)}</div><div class="muted small">${plural(saved, 'saved question')} · correct answers are revealed only at the end</div></div>
+      ${questionSourceCard(defaultSource(r, s, saved), s.types, clamp(s.count || 10, 1, 60), 60)}
       <div class="card">
-        <label class="field"><span class="label">Number of questions (1–${total})</span>
-          <input type="number" id="o-count" inputmode="numeric" min="1" max="${total}" value="${n}"></label>
         <label class="field"><span class="label">Time limit (minutes)</span>
           <input type="number" id="o-min" inputmode="numeric" min="1" max="300" value="${s.minutes}"></label>
       </div>
@@ -708,15 +751,55 @@ function viewExamSetup(r) {
     </main>`);
 }
 
+/** All readable text for a reviewer: its notes plus attached .docx/.pptx/.txt/.md files. */
+async function sourceTextOf(r) {
+  const parts = [r.notes || ''];
+  for (const f of (await filesOf(r.id)).filter((x) => /\.(docx|pptx|txt|md)$/i.test(x.name))) {
+    try { parts.push(await extractText(f)); } catch { /* skip unreadable file */ }
+  }
+  return parts.join('\n');
+}
+/** Build the question list for a quiz/exam: saved, freshly generated, or a mix. */
+async function buildQuestionPool(setup) {
+  const rid = setup.reviewerId;
+  const r = getReviewer(rid);
+  const count = setup.count;
+  const saved = setup.source === 'generated' ? [] : qsOf(rid).filter((q) => setup.types.includes(q.type));
+  let made = [];
+  if (setup.source !== 'saved') {
+    made = generateQuestions(await sourceTextOf(r), { types: setup.types, count }).map((it) => ({
+      id: uid(), reviewerId: rid, type: it.type, text: it.text, answer: it.answer, ...(it.type === 'mc' ? { choices: it.choices } : {}),
+    }));
+  }
+  let pool;
+  if (setup.source === 'mixed') {
+    const fromSaved = shuffle(saved).slice(0, Math.ceil(count / 2));
+    pool = shuffle([...fromSaved, ...made.slice(0, count - fromSaved.length)]);
+  } else {
+    pool = setup.source === 'saved' ? saved : made;
+  }
+  if (!pool.length) {
+    throw new Error(setup.source === 'saved'
+      ? 'No saved questions of those types. Add some, or switch to Random from notes.'
+      : 'Couldn’t find enough facts in your notes for those types. Try more types, or add notes or files.');
+  }
+  return pool.slice(0, count);
+}
+async function startFromSetup(setup) {
+  const pool = await buildQuestionPool(setup);
+  startSession(setup, pool);
+  if (pool.length < setup.count && setup.source !== 'saved') toast(`Only found ${plural(pool.length, 'question')} in your notes.`);
+}
+
 /* =====================================================================
    PLAY: QUIZ + EXAM
    ===================================================================== */
 let timerId = null;
 function stopTimer() { if (timerId) { clearInterval(timerId); timerId = null; } }
 
-function startSession(setup) {
+function startSession(setup, pool) {
   lastSetup = setup;
-  let list = qsOf(setup.reviewerId);
+  let list = pool || qsOf(setup.reviewerId);
   if (setup.shuffleQ) list = shuffle(list);
   if (setup.count) list = list.slice(0, setup.count);
   const items = list.map((q) => {
@@ -794,6 +877,13 @@ function renderQuestion() {
       return `<button class="option ${cls}" style="--i:${i}" data-act="pick" data-i="${i}" ${it.answered ? 'disabled' : ''}>
         <span class="letter">${q.type === 'tf' ? icon(i ? 'x' : 'check') : 'ABCD'[i]}</span><span class="txt">${esc(c.text)}</span></button>`;
     }).join('')}</div>`;
+  } else if (q.type === 'enum') {
+    inner = `<div style="margin-top:16px">
+      <p class="small muted" style="margin-bottom:8px">${enumItems(q).length} items, in any order. Put each on a new line or separate them with commas.</p>
+      <textarea id="id-input" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" style="min-height:120px"
+        placeholder="Type your answers…" ${it.answered ? 'disabled' : ''}>${it.answered ? esc(it.user) : ''}</textarea>
+      ${it.answered ? '' : `<button class="btn primary block" style="margin-top:10px" data-act="submit-id">${quiz ? 'Check answer' : 'Submit answer'}</button>`}
+    </div>`;
   } else {
     inner = `<div style="margin-top:16px">
       <input type="text" id="id-input" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
@@ -830,7 +920,7 @@ function submitAnswer(value) {
   if (it.answered) return;
   it.answered = true;
   it.user = value;
-  it.correct = it.choices ? it.choices[value].correct : checkIdentification(it.q, value);
+  it.correct = it.choices ? it.choices[value].correct : it.q.type === 'enum' ? checkEnumeration(it.q, value) : checkIdentification(it.q, value);
   s.answeredCount++;
   if (it.correct) {
     s.correct++;
@@ -911,7 +1001,7 @@ function renderResults() {
         ${r ? `<p class="muted small">${esc(r.title)}</p>` : ''}
       </div>
       <div class="btn-grid">
-        <button class="btn primary big" data-act="retry">Retry</button>
+        <button class="btn primary big" data-act="retry">${s.setup.source === 'saved' ? 'Retry' : 'New random set'}</button>
         <button class="btn big" data-act="nav" data-to="/r/${s.reviewerId}">Go back</button>
       </div>
       <div class="section-title">Review</div>
@@ -937,6 +1027,7 @@ function viewCards(r) {
         <button class="btn primary" data-act="nav" data-to="/r/${r.id}/study" ${cards.length ? '' : 'disabled'}>${icon('layers')}Study</button>
         <button class="btn" data-act="generate-cards" data-id="${r.id}" ${nq ? '' : 'disabled'}>${icon('sparkles')}From questions</button>
       </div>
+      <button class="btn block" data-act="gen-open" data-rid="${r.id}" data-mode="cards">${icon('sparkles')}Generate from notes &amp; files</button>
       ${cards.length ? `<button class="btn danger block sm" data-act="reset-progress" data-id="${r.id}">Reset “Know it” progress</button>` : ''}
       ${cards.length ? cards.map((c) => `<div class="card">
         <div class="row between">
@@ -1354,6 +1445,326 @@ async function extractToNotes(fileId) {
 }
 
 /* =====================================================================
+   AUTO-GENERATE — questions and flashcards from notes / attached files.
+   Rule-based and offline (no account, no AI). It finds "Term: meaning" lines and full sentences, then
+   blanks out a key term (names, numbers, long words) and borrows wrong answers from elsewhere in the text.
+   ===================================================================== */
+const STOP = new Set(('a an the this that these those it its he she they them his her their we you i our your is are was were be been being am of in on at to for from by with as and or but nor so yet if then than which who whom whose what when where why how not no can could will would shall should may might must do does did has have had into onto over under about after before between during through also each both all any some such other more most many much very just only own same too').split(' '));
+const GEN_BLANK = '_____';
+const normKey = (s) => String(s).toLowerCase().replace(/\s+/g, ' ').trim();
+const pickN = (arr, n) => shuffle(arr).slice(0, n);
+
+/** Split notes into facts: def {term, def}, sentence {text}, or list {title, items} (a heading followed by short bullets). */
+function extractFacts(text) {
+  const facts = [];
+  const seen = new Set();
+  const add = (f, key) => { if (!seen.has(normKey(key))) { seen.add(normKey(key)); facts.push(f); } };
+  const BUL = /^([•*\-–]|\d+[.)])\s+/;
+  const rows = String(text).split(/\r?\n/).map((l) => l.trim())
+    .filter((l) => l && !/^slide \d+$/i.test(l) && !/^—.*—$/.test(l))
+    .map((l) => ({ bullet: BUL.test(l), line: l.replace(BUL, '').replace(/\s+/g, ' ') }));
+  const pairOf = (line) => {
+    const m = line.match(/^([^:–—=]{2,60}?)\s*(?::|\s[-–—]\s|=)\s*(.{8,})$/);
+    return m && m[1].trim().split(' ').length <= 6 && !/[.!?]$/.test(m[1].trim()) ? { term: m[1].trim(), def: m[2].trim() } : null;
+  };
+  // lists: a heading followed by 3+ short bullets
+  for (let i = 0; i < rows.length; i++) {
+    const h = rows[i];
+    const hw = h.line.split(' ').length;
+    if (h.bullet || hw > 9 || !(h.line.endsWith(':') || (hw <= 6 && !/[.!?]$/.test(h.line)))) continue;
+    const items = [];
+    for (let j = i + 1; j < rows.length && rows[j].bullet; j++) {
+      const p = pairOf(rows[j].line);
+      const item = p ? p.term : rows[j].line;
+      if (item.split(' ').length > 6 || /[.!?]$/.test(item)) { items.length = 0; break; }
+      items.push(item);
+    }
+    if (items.length >= 3 && items.length <= 10) add({ kind: 'list', title: h.line.replace(/:$/, ''), items }, `list:${h.line}`);
+  }
+  rows.forEach(({ line }) => {
+    const p = pairOf(line);
+    if (p && p.def.length <= 240) { add({ kind: 'def', term: p.term, def: p.def }, p.term); return; }
+    if (line.split(' ').length < 5 && !/[.!?]$/.test(line)) return; // heading
+    (line.match(/[^.!?]+[.!?]+(?:["”')\]]+)?|[^.!?]+$/g) || []).forEach((sen) => {
+      sen = sen.trim();
+      if (sen.split(' ').length >= 5 && sen.length <= 240) add({ kind: 'sentence', text: sen }, sen);
+    });
+  });
+  return facts;
+}
+
+/** Possible words/numbers to blank out of a sentence. */
+function candidatesOf(sentence) {
+  const toks = [...sentence.matchAll(/\S+/g)].map((m) => {
+    const raw = m[0];
+    const core = raw.replace(/^[("“'\[]+/, '').replace(/[)"”'\].,;:!?]+$/, '');
+    return { core, start: m.index + raw.indexOf(core) };
+  }).filter((t) => t.core);
+  const out = [];
+  const capRe = /^[A-Z][A-Za-z'’-]*$/;
+  toks.forEach((t) => {
+    if (/^\d[\d,.]*%?$/.test(t.core)) out.push({ text: t.core, start: t.start, end: t.start + t.core.length, shape: 'num', score: 3, words: 1 });
+  });
+  for (let k = 0; k < toks.length;) {
+    if (capRe.test(toks[k].core) && !STOP.has(toks[k].core.toLowerCase())) {
+      let e = k;
+      while (e + 1 < toks.length && capRe.test(toks[e + 1].core) && !STOP.has(toks[e + 1].core.toLowerCase())) e++;
+      const end = toks[e].start + toks[e].core.length;
+      out.push({ text: sentence.slice(toks[k].start, end), start: toks[k].start, end, shape: 'cap', score: k === 0 ? 2.2 : 3, words: e - k + 1 });
+      k = e + 1;
+    } else k++;
+  }
+  toks.forEach((t) => {
+    if (/^[a-z][a-z-]{5,}$/.test(t.core) && !STOP.has(t.core)) {
+      out.push({ text: t.core, start: t.start, end: t.start + t.core.length, shape: 'word', score: 1 + Math.min(t.core.length, 14) / 20, words: 1 });
+    }
+  });
+  return out.filter((c) => toks.length - c.words >= 4);
+}
+
+function buildPool(facts) {
+  const pool = { num: [], cap: [], word: [] };
+  facts.filter((f) => f.kind === 'sentence').forEach((f) => candidatesOf(f.text).forEach((c) => {
+    if (!pool[c.shape].some((x) => normKey(x.text) === normKey(c.text))) pool[c.shape].push(c);
+  }));
+  return pool;
+}
+function numberVariants(text) {
+  const base = parseFloat(text.replace(/,/g, ''));
+  if (Number.isNaN(base)) return [];
+  const pct = text.endsWith('%') ? '%' : '';
+  const commas = text.includes(',');
+  const dec = (text.replace('%', '').split('.')[1] || '').length;
+  const year = Number.isInteger(base) && base >= 1000 && base <= 2100 && !commas;
+  const deltas = year ? [-50, -25, -10, -5, 5, 10, 25, 50]
+    : base >= 20 ? [base * -.5, base * -.25, base * -.1, base * .1, base * .25, base, base * 2]
+      : [-3, -2, -1, 1, 2, 3, 5];
+  return [...new Set(deltas.map((d) => base + d).filter((v) => v >= 0 && v !== base)
+    .map((v) => { const r = dec ? v.toFixed(dec) : String(Math.round(v)); return (commas ? Number(r).toLocaleString('en-US') : r) + pct; }))];
+}
+/** Wrong answers of the same kind as the real one. */
+function distractorsFor(c, sentence, pool, n) {
+  const low = sentence.toLowerCase();
+  let list = pool[c.shape].filter((x) => normKey(x.text) !== normKey(c.text) && x.words === c.words && !low.includes(x.text.toLowerCase())).map((x) => x.text);
+  list = pickN(list, n);
+  if (c.shape === 'num' && list.length < n) list = list.concat(pickN(numberVariants(c.text).filter((v) => !list.includes(v)), n - list.length));
+  return list;
+}
+const bestCandidate = (cands) => cands.map((c) => ({ c, s: c.score + Math.random() * .6 })).sort((a, b) => b.s - a.s)[0].c;
+
+function mcFrom(text, answer, wrong, card) {
+  const choices = shuffle([answer, ...wrong]);
+  return { type: 'mc', text, choices, answer: choices.indexOf(answer), card };
+}
+const ENUM_ITEM = "[A-Za-z][A-Za-z'’-]*(?: [A-Za-z][A-Za-z'’-]*){0,2}";
+const ENUM_RE = new RegExp(`(?:\\b(?:are|include|includes|including|such as|consist of|consists of|contain|contains|need|needs|require|requires|use|uses|has|have)\\b|[:—])\\s+(${ENUM_ITEM}(?:,\\s+${ENUM_ITEM})+,?\\s+(?:and|or)\\s+${ENUM_ITEM})\\s*[.!?]?$`);
+function makeEnum(f) {
+  if (f.kind === 'list') {
+    const card = { front: `Enumerate: ${f.title}`, back: f.items.join(', ') };
+    return { type: 'enum', text: `Enumerate all ${f.items.length} items listed under “${f.title}” (any order).`, answer: f.items, card };
+  }
+  if (f.kind !== 'sentence') return null;
+  const m = f.text.match(ENUM_RE);
+  if (!m) return null;
+  const items = m[1].split(/,\s*(?:and|or)\s+|\s+(?:and|or)\s+|,\s+/).map((x) => x.trim()).filter(Boolean);
+  if (items.length < 3 || items.length > 8) return null;
+  const blank = f.text.replace(m[1], GEN_BLANK);
+  return { type: 'enum', text: `Name all ${items.length} items that complete this sentence (any order):\n\n${blank}`, answer: items, card: { front: blank, back: items.join(', ') } };
+}
+function makeItem(f, type, pairs, pool) {
+  if (type === 'enum') return makeEnum(f);
+  if (f.kind === 'list') return null;
+  if (f.kind === 'def') {
+    const card = { front: f.term, back: f.def };
+    const others = pairs.filter((p) => p !== f && normKey(p.term) !== normKey(f.term));
+    if (type === 'id') return { type: 'id', text: `Which term is described below?\n\n${f.def}`, answer: f.term, card };
+    if (type === 'mc') {
+      const wrong = pickN(others.map((p) => p.term), 3);
+      return wrong.length < 3 ? null : mcFrom(`Which term matches this description?\n\n${f.def}`, f.term, wrong, card);
+    }
+    if (Math.random() < .5 || !others.length) return { type: 'tf', text: `${f.term}: ${f.def}`, answer: true, card };
+    return { type: 'tf', text: `${f.term}: ${others[Math.floor(Math.random() * others.length)].def}`, answer: false, card };
+  }
+  const cands = candidatesOf(f.text);
+  if (!cands.length) return null;
+  const c = bestCandidate(cands);
+  const blank = f.text.slice(0, c.start) + GEN_BLANK + f.text.slice(c.end);
+  const card = { front: blank, back: c.text };
+  if (type === 'id') return { type: 'id', text: blank, answer: c.text, card };
+  if (type === 'mc') {
+    const wrong = distractorsFor(c, f.text, pool, 3);
+    return wrong.length < 3 ? null : mcFrom(blank, c.text, wrong, card);
+  }
+  if (Math.random() < .5) return { type: 'tf', text: f.text, answer: true, card };
+  const d = distractorsFor(c, f.text, pool, 1)[0];
+  if (!d) return { type: 'tf', text: f.text, answer: true, card };
+  return { type: 'tf', text: f.text.slice(0, c.start) + d + f.text.slice(c.end), answer: false, card };
+}
+function makeCard(f) {
+  if (f.kind === 'list') return { front: `Enumerate: ${f.title}`, back: f.items.join(', ') };
+  if (f.kind === 'def') return { front: f.term, back: f.def };
+  const cands = candidatesOf(f.text);
+  if (!cands.length) return null;
+  const c = bestCandidate(cands);
+  return { front: f.text.slice(0, c.start) + GEN_BLANK + f.text.slice(c.end), back: c.text };
+}
+
+/** opts: { types: ['mc','tf','id'], count }  ->  array of question items (each with .card) */
+function generateQuestions(text, { types, count }) {
+  const facts = extractFacts(text);
+  const pairs = facts.filter((f) => f.kind === 'def');
+  const pool = buildPool(facts);
+  const items = [];
+  const seen = new Set();
+  let turn = 0;
+  for (let pass = 0; pass < 2 && items.length < count; pass++) {
+    for (const f of shuffle(facts)) {
+      if (items.length >= count) break;
+      for (let k = 0; k < types.length; k++) {
+        const it = makeItem(f, types[(turn + k) % types.length], pairs, pool);
+        if (it && !seen.has(normKey(it.text))) { seen.add(normKey(it.text)); items.push(it); break; }
+      }
+      turn++;
+    }
+  }
+  return items;
+}
+function generateCardItems(text, count) {
+  const out = [];
+  const seen = new Set();
+  for (const f of shuffle(extractFacts(text))) {
+    if (out.length >= count) break;
+    const card = makeCard(f);
+    if (card && !seen.has(normKey(card.front))) { seen.add(normKey(card.front)); out.push({ card }); }
+  }
+  return out;
+}
+
+/* ---------- UI ---------- */
+let gen = null; // { rid, mode: 'questions' | 'cards', files, items, keepCards }
+async function openGenerator(rid, mode) {
+  const files = (await filesOf(rid)).filter((f) => /\.(docx|pptx|txt|md)$/i.test(f.name));
+  gen = { rid, mode, files, items: [], keepCards: true };
+  renderGenSetup();
+}
+function renderGenSetup() {
+  const r = getReviewer(gen.rid);
+  const hasNotes = !!(r.notes || '').trim();
+  const q = gen.mode === 'questions';
+  const none = !hasNotes && !gen.files.length;
+  openModal(`<h2>${q ? 'Auto-generate questions' : 'Generate flashcards'}</h2>
+    <p class="muted small">Builds practice from your notes and files, right on your device. It works best with full sentences or “Term: meaning” lines. You can review everything before adding it.</p>
+    <div class="section-title" style="margin-top:16px">Use text from</div>
+    <div class="card" style="padding:4px 16px">
+      ${toggleRow('g-notes', 'Reviewer notes', hasNotes ? `${(r.notes || '').length.toLocaleString()} characters` : 'No notes yet', hasNotes).replace('<input type="checkbox"', hasNotes ? '<input type="checkbox"' : '<input type="checkbox" disabled')}
+      ${gen.files.map((f, i) => toggleRow(`g-file-${i}`, esc(f.name), fmtSize(f.size), true)).join('')}
+    </div>
+    ${q ? `<div class="section-title">Question types</div>
+    <div class="card" style="padding:4px 16px">
+      ${toggleRow('g-t-mc', 'Multiple choice', 'Fill in the blank with 4 choices', true)}
+      ${toggleRow('g-t-tf', 'True or false', 'Real statements and altered ones', true)}
+      ${toggleRow('g-t-id', 'Identification', 'Type the missing word or term', true)}
+      ${toggleRow('g-t-enum', 'Enumeration', 'Name every item in a list (needs lists in your notes)', true)}
+    </div>` : ''}
+    <label class="field" style="margin-top:16px"><span class="label">How many ${q ? 'questions' : 'cards'}? (1–60)</span>
+      <input type="number" id="g-n" inputmode="numeric" min="1" max="60" value="${q ? 10 : 20}"></label>
+    ${q ? `<div class="card" style="padding:4px 16px;margin-top:14px">${toggleRow('g-cards', 'Also create flashcards', 'One card for each question you keep', true)}</div>` : ''}
+    <div class="row" style="margin-top:18px">
+      <button class="btn grow" data-act="close-modal">Cancel</button>
+      <button class="btn primary grow" data-act="gen-run" ${none ? 'disabled' : ''}>${icon('sparkles')}Generate</button>
+    </div>
+    ${none ? '<p class="small muted center" style="margin-top:10px">Add notes or attach a .docx, .pptx, .txt or .md file first.</p>' : ''}`);
+}
+async function genRun() {
+  const r = getReviewer(gen.rid);
+  const m = modalEl();
+  const n = clamp(parseInt($('#g-n', m).value, 10) || 10, 1, 60);
+  const parts = [];
+  if ($('#g-notes', m)?.checked && (r.notes || '').trim()) parts.push(r.notes);
+  for (let i = 0; i < gen.files.length; i++) {
+    if (!$(`#g-file-${i}`, m)?.checked) continue;
+    try { parts.push(await extractText(gen.files[i])); } catch (e) { toast(`Skipped “${gen.files[i].name}”: ${e.message}`); }
+  }
+  gen.text = parts.join('\n');
+  if (gen.mode === 'questions') {
+    gen.types = ALL_TYPES.filter((t) => $(`#g-t-${t}`, m)?.checked);
+    if (!gen.types.length) return toast('Please pick at least one question type.');
+    gen.keepCards = !!$('#g-cards', m)?.checked;
+  }
+  gen.count = n;
+  genRegenerate();
+}
+function genRegenerate() {
+  gen.items = gen.mode === 'questions' ? generateQuestions(gen.text, { types: gen.types, count: gen.count }) : generateCardItems(gen.text, gen.count);
+  renderGenPreview();
+}
+function genItemHtml(it, i) {
+  const q = gen.mode === 'questions';
+  const body = !q ? `<div style="font-weight:650;white-space:pre-wrap;overflow-wrap:anywhere">${esc(it.card.front)}</div>
+      <div class="small muted" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(it.card.back)}</div>`
+    : `<div style="font-weight:650;white-space:pre-wrap;overflow-wrap:anywhere">${esc(it.text)}</div>
+      ${it.type === 'mc' ? `<div class="small" style="margin-top:4px">${it.choices.map((c, k) => `<div class="${k === it.answer ? '' : 'muted'}" style="${k === it.answer ? 'font-weight:700' : ''}">${'ABCD'[k]}. ${esc(c)}</div>`).join('')}</div>`
+        : `<div class="small muted" style="margin-top:4px">Answer: <b>${esc(it.type === 'tf' ? (it.answer ? 'True' : 'False') : Array.isArray(it.answer) ? it.answer.join(', ') : it.answer)}</b></div>`}`;
+  return `<label class="card" style="display:flex;gap:12px;align-items:flex-start;padding:14px;cursor:pointer">
+    <input type="checkbox" class="gen-pick" data-i="${i}" checked style="width:22px;height:22px;margin-top:2px;accent-color:var(--primary);flex:none">
+    <div class="grow">${q ? `<span class="badge primary" style="margin-bottom:6px">${TYPE_LABEL[it.type]}</span>` : ''}${body}</div></label>`;
+}
+function renderGenPreview() {
+  const q = gen.mode === 'questions';
+  if (!gen.items.length) {
+    openModal(`<h2>Nothing to generate yet</h2>
+      <p class="muted">Couldn’t find enough facts in that text. Try writing notes as full sentences (at least 5 words) or as “Term: meaning” lines, or turn on more sources.</p>
+      <div class="row" style="margin-top:18px"><button class="btn grow" data-act="gen-back">Back</button><button class="btn grow" data-act="close-modal">Close</button></div>`);
+    return;
+  }
+  openModal(`<h2>${q ? 'Review questions' : 'Review flashcards'}</h2>
+    <p class="muted small">Untick anything you don’t want. Answers are chosen automatically, so give them a quick look.</p>
+    <div class="stack" style="margin-top:12px;max-height:52dvh;overflow-y:auto;padding:2px">${gen.items.map(genItemHtml).join('')}</div>
+    <div class="row" style="margin-top:16px">
+      <button class="btn grow" data-act="gen-back">Back</button>
+      <button class="btn grow" data-act="gen-again">${icon('shuffle')}Redo</button>
+    </div>
+    <button class="btn primary block" style="margin-top:10px" data-act="gen-add" id="gen-add">${icon('plus')}Add ${gen.items.length}</button>`);
+}
+function updateGenCount() {
+  const n = $$('.gen-pick:checked').length;
+  const b = $('#gen-add');
+  if (!b) return;
+  b.innerHTML = `${icon('plus')}Add ${n}`;
+  b.disabled = n === 0;
+}
+function genAdd() {
+  const picked = $$('.gen-pick:checked').map((el) => gen.items[+el.dataset.i]);
+  if (!picked.length) return;
+  const rid = gen.rid;
+  const haveQ = new Set(qsOf(rid).map((x) => normKey(x.text)));
+  const haveC = new Set(cardsOf(rid).map((x) => normKey(x.front)));
+  let nq = 0, nc = 0;
+  const t = Date.now();
+  picked.forEach((it, i) => {
+    if (gen.mode === 'questions' && !haveQ.has(normKey(it.text))) {
+      const q = { id: uid(), reviewerId: rid, type: it.type, text: it.text, answer: it.answer, created: t + i };
+      if (it.type === 'mc') q.choices = it.choices;
+      save('questions', q);
+      haveQ.add(normKey(it.text));
+      nq++;
+    }
+    if ((gen.mode === 'cards' || gen.keepCards) && !haveC.has(normKey(it.card.front))) {
+      save('flashcards', { id: uid(), reviewerId: rid, front: it.card.front, back: it.card.back, status: 'new', created: t + i });
+      haveC.add(normKey(it.card.front));
+      nc++;
+    }
+  });
+  touchReviewer(rid);
+  closeModal();
+  const bits = [];
+  if (nq) bits.push(plural(nq, 'question'));
+  if (nc) bits.push(plural(nc, 'flashcard'));
+  toast(bits.length ? `Added ${bits.join(' and ')}` : 'Everything was already in this reviewer.');
+  route();
+}
+
+/* =====================================================================
    SAMPLE DATA
    ===================================================================== */
 function loadSample() {
@@ -1426,7 +1837,7 @@ const ACTIONS = {
     qForm.type = el.dataset.t;
     $$('#q-seg button').forEach((b) => b.classList.toggle('on', b === el));
     $('#q-type-label').textContent = TYPE_LABEL[qForm.type];
-    ['mc', 'tf', 'id'].forEach((t) => $(`#sec-${t}`).classList.toggle('hidden', t !== qForm.type));
+    ALL_TYPES.forEach((t) => $(`#sec-${t}`).classList.toggle('hidden', t !== qForm.type));
   },
   'tf-pick': (el) => $$('#tf-seg button').forEach((b) => b.classList.toggle('on', b === el)),
   'save-question': (el) => saveQuestion(el.dataset.more === '1'),
@@ -1437,22 +1848,41 @@ const ACTIONS = {
     const rid = location.hash.split('/')[2];
     go(`/r/${rid}/${cardsOf(rid).length ? 'study' : 'cards'}`);
   },
-  begin: (el) => {
+  'src-pick': (el) => {
+    $$('#o-src button').forEach((b) => b.classList.toggle('on', b === el));
+    $('#o-src-hint').textContent = SRC_HINT[el.dataset.v];
+  },
+  'type-pick': (el) => {
+    if (el.classList.contains('on') && $$('#o-types .chip.on').length === 1) return toast('Keep at least one question type.');
+    el.classList.toggle('on');
+  },
+  begin: async (el) => {
     const rid = el.dataset.id;
-    const total = qsOf(rid).length;
+    const source = $('#o-src .on').dataset.v;
+    const types = $$('#o-types .chip.on').map((b) => b.dataset.t);
+    const count = clamp(parseInt($('#o-count').value, 10) || 1, 1, el.dataset.mode === 'quiz' ? 100 : 60);
     let setup;
     if (el.dataset.mode === 'quiz') {
-      settings.quiz = { shuffleQ: $('#o-shufq').checked, shuffleC: $('#o-shufc').checked, lives: $('#o-lives').checked };
+      settings.quiz = { shuffleQ: $('#o-shufq').checked, shuffleC: $('#o-shufc').checked, lives: $('#o-lives').checked, source, types, count };
       setup = { mode: 'quiz', reviewerId: rid, ...settings.quiz };
     } else {
-      const count = clamp(parseInt($('#o-count').value, 10) || 1, 1, total);
       const minutes = clamp(parseInt($('#o-min').value, 10) || 1, 1, 300);
-      settings.exam = { count, minutes, shuffle: $('#o-shuf').checked, lives: $('#o-lives').checked };
-      setup = { mode: 'exam', reviewerId: rid, count, minutes, shuffleQ: settings.exam.shuffle, shuffleC: settings.exam.shuffle, lives: settings.exam.lives };
+      settings.exam = { count, minutes, shuffle: $('#o-shuf').checked, lives: $('#o-lives').checked, source, types };
+      setup = { mode: 'exam', reviewerId: rid, count, minutes, source, types, shuffleQ: settings.exam.shuffle, shuffleC: settings.exam.shuffle, lives: settings.exam.lives };
     }
     saveSettings();
-    startSession(setup);
-    go(`/r/${rid}/play`);
+    const label = el.innerHTML;
+    el.disabled = true;
+    el.innerHTML = `${icon('sparkles')}Preparing your ${el.dataset.mode}…`;
+    try {
+      await startFromSetup(setup);
+      go(`/r/${rid}/play`);
+    } catch (e) {
+      toast(e.message || 'Could not start.');
+    } finally {
+      el.disabled = false;
+      el.innerHTML = label;
+    }
   },
   pick: (el) => submitAnswer(Number(el.dataset.i)),
   'submit-id': () => {
@@ -1470,10 +1900,17 @@ const ACTIONS = {
     stopTimer();
     go(`/r/${rid}`);
   },
-  retry: () => { startSession(lastSetup); renderPlay(); },
+  retry: async () => {
+    try { await startFromSetup(lastSetup); renderPlay(); } catch (e) { toast(e.message || 'Could not start.'); }
+  },
 
   /* flashcards */
   'generate-cards': (el) => generateCards(el.dataset.id),
+  'gen-open': (el) => openGenerator(el.dataset.rid, el.dataset.mode),
+  'gen-run': (el) => { el.disabled = true; genRun().finally(() => { el.disabled = false; }); },
+  'gen-again': () => genRegenerate(),
+  'gen-back': () => renderGenSetup(),
+  'gen-add': () => genAdd(),
   'new-card': (el) => cardForm(el.dataset.rid, null),
   'edit-card': (el) => cardForm(null, data.flashcards.find((c) => c.id === el.dataset.id)),
   'save-card': (el) => {
@@ -1556,6 +1993,7 @@ document.addEventListener('input', (e) => {
   if (e.target.id === 'search') $('#home-list').innerHTML = homeList(e.target.value);
 });
 document.addEventListener('change', (e) => {
+  if (e.target.classList?.contains('gen-pick')) updateGenCount();
   if (e.target.id === 'file-input' && e.target.files.length) {
     addFiles([...e.target.files], location.hash.split('/')[2]);
     e.target.value = '';
@@ -1569,7 +2007,7 @@ document.addEventListener('keydown', (e) => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
   if (e.key === 'Escape') return closeModal();
   if (e.key === 'Enter' && e.target.id === 'a-pass') { e.preventDefault(); return ACTIONS['sign-in'](); }
-  if (e.key === 'Enter' && e.target.id === 'id-input') { e.preventDefault(); return ACTIONS['submit-id'](); }
+  if (e.key === 'Enter' && e.target.id === 'id-input' && e.target.tagName === 'INPUT') { e.preventDefault(); return ACTIONS['submit-id'](); }
   if (study && !typing && !$('#modal-root .modal') && study.i < study.deck.length) {
     if (e.key === 'ArrowRight') gotoCard(study.i + 1, 1);
     else if (e.key === 'ArrowLeft' && study.i > 0) gotoCard(study.i - 1, -1);
