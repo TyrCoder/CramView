@@ -391,10 +391,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .fc-wrap.slide-right { animation: cardInL .5s var(--ease); }
 .fc {
   position: relative; width: 100%; height: min(54vh, 360px); min-height: 250px;
-  cursor: pointer; transform-style: preserve-3d; transition: transform .7s var(--ease), filter .4s;
+  cursor: pointer; transform-style: preserve-3d; transition: transform .7s var(--ease);
   touch-action: pan-y; user-select: none; -webkit-user-select: none;
 }
-.fc:hover { filter: drop-shadow(0 14px 22px color-mix(in srgb, var(--primary) 30%, transparent)); }
+/* no filter on .fc or its parents: a filter flattens the 3D flip and shows the front mirrored */
+.fc-face { transition: box-shadow .4s var(--ease); }
+.fc:hover .fc-face { box-shadow: var(--shadow-lift), 0 18px 34px -12px color-mix(in srgb, var(--primary) 45%, transparent); }
 .fc.flipped { transform: rotateY(180deg); }
 .fc-face {
   position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden;

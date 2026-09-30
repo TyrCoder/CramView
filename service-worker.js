@@ -1,4 +1,4 @@
-/* Cramview — service worker
+﻿/* Cramview â€” service worker
    Makes the app work offline.
 
    HOW UPDATES WORK
@@ -7,7 +7,7 @@
    - When you change app files, also bump CACHE_VERSION below. The app will
      then show an "Update" button so the new version loads right away.
 */
-const CACHE_VERSION = 'v1.7.1';
+const CACHE_VERSION = 'v1.7.2';
 const CACHE_NAME = `cramview-${CACHE_VERSION}`;
 
 const APP_SHELL = [
