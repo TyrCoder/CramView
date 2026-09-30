@@ -25,12 +25,114 @@ function shuffle(arr) {
   }
   return a;
 }
+/* ---------- Icons (inline SVG, Lucide-style strokes) ---------- */
+const ICONS = {
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  timer: '<line x1="10" x2="14" y1="2" y2="2"/><line x1="12" x2="15" y1="14" y2="11"/><circle cx="12" cy="14" r="8"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 12 10 5 10-5"/><path d="m2 17 10 5 10-5"/>',
+  'file-text': '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
+  file: '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/>',
+  image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/>',
+  heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  'check-circle': '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  'x-circle': '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+  'arrow-right': '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+  rotate: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  shuffle: '<path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22"/><path d="m18 2 4 4-4 4"/><path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2"/><path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8"/><path d="m18 14 4 4-4 4"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+  sparkles: '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  trophy: '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-1.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98 1.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>',
+  award: '<circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/>',
+  skull: '<circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M8 20v2h8v-2"/><path d="m12.5 17-.5-1-.5 1h1z"/><path d="M16 20a2 2 0 0 0 1.56-3.25 8 8 0 1 0-11.12 0A2 2 0 0 0 8 20"/>',
+  'thumbs-up': '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/>',
+  zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+};
+const icon = (name, cls = '') =>
+  `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+const LIFE_TITLE = `Life system <span class="hm">${icon('heart', 'fill')}${icon('heart', 'fill')}${icon('heart', 'fill')}</span>`;
+
+/* ---------- Motion helpers ---------- */
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+/** Count numbers up from 0 (stat tiles, score). */
+function animateCounts(root = document) {
+  if (reduced) return;
+  $$('.stat b, .big-score', root).forEach((el) => {
+    const m = el.textContent.match(/^(\d+)(.*)$/);
+    if (!m || +m[1] === 0) return;
+    const end = +m[1], suffix = m[2], t0 = performance.now(), dur = 900;
+    el.textContent = `0${suffix}`;
+    const step = (t) => {
+      const p = Math.min(1, (t - t0) / dur);
+      el.textContent = `${Math.round(end * (1 - (1 - p) ** 3))}${suffix}`;
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+function confetti() {
+  if (reduced) return;
+  const box = document.createElement('div');
+  box.className = 'confetti';
+  const colors = ['#6366f1', '#8b5cf6', '#f43f5e', '#f59e0b', '#10b981', '#0ea5e9'];
+  for (let i = 0; i < 46; i++) {
+    const p = document.createElement('i');
+    p.style.cssText = `left:${Math.random() * 100}%;background:${colors[i % colors.length]};--x:${(Math.random() - .5) * 180}px;--r:${Math.random() * 720}deg;animation-delay:${Math.random() * .4}s;animation-duration:${1.7 + Math.random() * 1.3}s`;
+    box.appendChild(p);
+  }
+  document.body.appendChild(box);
+  setTimeout(() => box.remove(), 3600);
+}
+/** Little fragments flying off a heart that was just lost. */
+function heartBurst(heart) {
+  if (reduced) return;
+  for (let i = 0; i < 8; i++) {
+    const p = document.createElement('i');
+    const a = (Math.PI * 2 * i) / 8 + Math.random() * .5, d = 24 + Math.random() * 18;
+    p.className = 'hp';
+    p.style.setProperty('--dx', `${Math.cos(a) * d}px`);
+    p.style.setProperty('--dy', `${Math.sin(a) * d}px`);
+    heart.appendChild(p);
+  }
+  setTimeout(() => heart.querySelectorAll('.hp').forEach((x) => x.remove()), 800);
+}
+/** Touch/click ripple on buttons, options and tappable cards. */
+document.addEventListener('pointerdown', (e) => {
+  const t = e.target.closest('.btn, .option, .fab, .card.tap');
+  if (!t || t.disabled || reduced) return;
+  const r = t.getBoundingClientRect();
+  const size = Math.max(r.width, r.height) * 2;
+  const el = document.createElement('span');
+  el.className = 'ripple';
+  el.style.cssText = `width:${size}px;height:${size}px;left:${e.clientX - r.left - size / 2}px;top:${e.clientY - r.top - size / 2}px`;
+  t.appendChild(el);
+  setTimeout(() => el.remove(), 700);
+});
+
 function toast(msg) {
+  const err = /fail|could not|couldn|not |isn’t|over |invalid|enter |please|offline|expired|must |no text|different/i.test(msg);
+  const ok = !err && /saved|added|deleted|synced|signed|import|complete|ready|downloaded|reset|cleared|removed|sample/i.test(msg);
   const el = document.createElement('div');
-  el.className = 'toast';
-  el.textContent = msg;
+  el.className = `toast ${err ? 'err' : ok ? '' : 'info'}`;
+  el.innerHTML = icon(err ? 'alert' : ok ? 'check-circle' : 'info');
+  const span = document.createElement('span');
+  span.textContent = msg;
+  el.appendChild(span);
   $('#toasts').appendChild(el);
-  setTimeout(() => el.remove(), 2600);
+  setTimeout(() => el.classList.add('out'), 2400);
+  setTimeout(() => el.remove(), 2750);
 }
 
 const TYPE_LABEL = { mc: 'Multiple choice', tf: 'True / False', id: 'Identification' };
@@ -104,7 +206,7 @@ async function loadAll() {
 }
 function writeFailed(err) {
   console.error(err);
-  toast('⚠️ Could not save. Storage may be full or blocked.');
+  toast('Could not save. Storage may be full or blocked.');
 }
 function persistLS() {
   try { localStorage.setItem('cramview-data', JSON.stringify({ ...data, tombstones: tombs })); } catch (e) { writeFailed(e); }
@@ -229,10 +331,13 @@ const go = (path) => { location.hash = '#' + path; };
 function render(html) {
   app.innerHTML = html;
   window.scrollTo(0, 0);
+  $$('main.container > *:not(.stagger-group), main.container > .stagger-group > *')
+    .forEach((el, i) => el.style.setProperty('--i', Math.min(i, 14)));
+  animateCounts(app);
 }
 function topbar(title, backTo, extra = '') {
   return `<header class="topbar">
-    ${backTo ? `<button class="btn ghost icon" data-act="nav" data-to="${backTo}" aria-label="Back">←</button>` : ''}
+    ${backTo ? `<button class="btn ghost icon" data-act="nav" data-to="${backTo}" aria-label="Back">${icon('arrow-left')}</button>` : ''}
     <h1>${title}</h1>${extra}
   </header>`;
 }
@@ -268,7 +373,7 @@ function route() {
    MODALS
    ===================================================================== */
 function openModal(html) {
-  closeModal();
+  $('#modal-root').innerHTML = '';
   const back = document.createElement('div');
   back.className = 'modal-back';
   back.innerHTML = `<div class="modal" role="dialog" aria-modal="true">${html}</div>`;
@@ -276,7 +381,11 @@ function openModal(html) {
   $('#modal-root').appendChild(back);
   return back.firstElementChild;
 }
-function closeModal() { $('#modal-root').innerHTML = ''; }
+function closeModal() {
+  const backs = [...$('#modal-root').children];
+  backs.forEach((b) => b.classList.add('closing'));
+  if (backs.length) setTimeout(() => backs.forEach((b) => b.remove()), 240);
+}
 const modalEl = () => $('#modal-root .modal');
 
 function confirmBox({ title, message, okText = 'Delete', danger = true }) {
@@ -308,7 +417,7 @@ function reviewerCard(r) {
         <div class="card-title ellip">${esc(r.title)}</div>
         <div class="muted small ellip">${esc(r.subject || 'No subject')}</div>
       </div>
-      <span class="muted" aria-hidden="true">›</span>
+      <span class="muted chev" aria-hidden="true">${icon('chevron-right')}</span>
     </div>
     <div class="row wrap" style="margin-top:10px;gap:6px">
       <span class="badge primary">${plural(nq, 'question')}</span>
@@ -323,22 +432,22 @@ function homeList(query) {
     .filter((r) => !q || normText(`${r.title} ${r.subject} ${r.notes}`).includes(q))
     .sort((a, b) => b.updated.localeCompare(a.updated));
   if (!data.reviewers.length) {
-    return `<div class="empty"><span class="emoji">📚</span>
+    return `<div class="empty"><span class="empty-ic">${icon('book')}</span>
       <h2>No reviewers yet</h2>
       <p style="margin:6px 0 18px">Create a reviewer for a subject, add questions, then quiz yourself.</p>
-      <div class="stack"><button class="btn primary block" data-act="new-reviewer">+ Create your first reviewer</button>
+      <div class="stack"><button class="btn primary block" data-act="new-reviewer">${icon('plus')}Create your first reviewer</button>
       <button class="btn block" data-act="load-sample">Try a sample reviewer</button></div></div>`;
   }
-  if (!list.length) return `<div class="empty"><span class="emoji">🔍</span>Nothing matches “${esc(query)}”.</div>`;
+  if (!list.length) return `<div class="empty"><span class="empty-ic">${icon('search')}</span>Nothing matches “${esc(query)}”.</div>`;
   return list.map(reviewerCard).join('');
 }
 function viewHome() {
-  render(`${topbar('📚 Cramview', '', `<button class="btn ghost icon" data-act="nav" data-to="/data" aria-label="Sync and backup">☁️</button>`)}
+  render(`${topbar(`<span class="brand">${icon('book')}Cramview</span>`, '', `<button class="btn ghost icon" data-act="nav" data-to="/data" aria-label="Sync and backup">${icon('cloud')}</button>`)}
     <main class="container stack">
-      ${data.reviewers.length ? `<input type="search" id="search" placeholder="Search reviewers…" autocomplete="off">` : ''}
-      <div id="home-list" class="stack">${homeList('')}</div>
+      ${data.reviewers.length ? `<div class="search-wrap">${icon('search')}<input type="search" id="search" placeholder="Search reviewers…" autocomplete="off"></div>` : ''}
+      <div id="home-list" class="stack stagger-group">${homeList('')}</div>
     </main>
-    ${data.reviewers.length ? `<button class="fab" data-act="new-reviewer">+ New</button>` : ''}`);
+    ${data.reviewers.length ? `<button class="fab" data-act="new-reviewer">${icon('plus')}New</button>` : ''}`);
 }
 
 /* =====================================================================
@@ -355,7 +464,7 @@ function attemptRow(a) {
     </div>
     <div class="row between small muted" style="margin-top:6px">
       <span>${esc(fmtDate(a.date))}</span>
-      <span>${a.livesOn ? `${a.livesLeft} ❤️ left` : 'Lives off'}</span>
+      <span>${a.livesOn ? `<span class="inline-ic">${a.livesLeft} ${icon('heart', 'fill heart-ic')} left</span>` : 'Lives off'}</span>
     </div>
   </div>`;
 }
@@ -372,32 +481,32 @@ function viewOverview(r) {
   const last = pcts.length ? pcts[0] + '%' : '–';
   const avg = pcts.length ? Math.round(pcts.reduce((s, p) => s + p, 0) / pcts.length) + '%' : '–';
 
-  render(`${topbar(esc(r.title), '/', `<button class="btn ghost icon" data-act="edit-reviewer" data-id="${r.id}" aria-label="Edit reviewer">✏️</button>`)}
+  render(`${topbar(esc(r.title), '/', `<button class="btn ghost icon" data-act="edit-reviewer" data-id="${r.id}" aria-label="Edit reviewer">${icon('edit')}</button>`)}
   <main class="container">
     <div class="card stack">
       <div>
         <h2>${esc(r.title)}</h2>
         ${r.subject ? `<span class="badge primary" style="margin-top:6px">${esc(r.subject)}</span>` : ''}
       </div>
-      <div class="section-title" style="margin:0">Notes &amp; lessons</div>
-      ${r.notes ? `<div class="notes">${esc(r.notes)}</div>` : `<p class="muted">No notes yet. Tap ✏️ to add your lessons.</p>`}
+      <div class="section-title" style="margin:6px 0 0">Notes &amp; lessons</div>
+      ${r.notes ? `<div class="notes">${esc(r.notes)}</div>` : `<p class="muted">No notes yet. Tap the edit button to add your lessons.</p>`}
     </div>
 
     <div class="row between">
       <div class="section-title">Files</div>
-      <button class="btn sm" data-act="add-files" style="margin-top:14px">+ Add files</button>
+      <button class="btn sm" data-act="add-files" style="margin:14px 0 10px">${icon('plus')}Add files</button>
     </div>
     <input type="file" id="file-input" multiple class="hidden">
-    <div id="files-list" class="stack"></div>
+    <div id="files-list" class="stack stagger-group"></div>
 
     <div class="section-title">Start</div>
     <div class="btn-grid">
-      <button class="btn big primary" data-act="start-setup" data-mode="quiz"><span class="emoji">🎯</span>Quiz Mode</button>
-      <button class="btn big primary" data-act="start-setup" data-mode="exam"><span class="emoji">⏱️</span>Exam Mode</button>
-      <button class="btn big" data-act="open-cards"><span class="emoji">🃏</span>Flashcards</button>
-      <button class="btn big" data-act="nav" data-to="/r/${r.id}/questions"><span class="emoji">📝</span>Edit Questions</button>
+      <button class="btn big primary" data-act="start-setup" data-mode="quiz"><span class="big-ic">${icon('target')}</span>Quiz Mode</button>
+      <button class="btn big primary" data-act="start-setup" data-mode="exam"><span class="big-ic">${icon('timer')}</span>Exam Mode</button>
+      <button class="btn big" data-act="open-cards"><span class="big-ic">${icon('layers')}</span>Flashcards</button>
+      <button class="btn big" data-act="nav" data-to="/r/${r.id}/questions"><span class="big-ic">${icon('file-text')}</span>Edit Questions</button>
     </div>
-    <button class="btn block" style="margin-top:10px" data-act="nav" data-to="/r/${r.id}/cards">✏️ Edit Flashcards</button>
+    <button class="btn block" style="margin-top:10px" data-act="nav" data-to="/r/${r.id}/cards">${icon('edit')}Edit Flashcards</button>
 
     <div class="section-title">Questions</div>
     <div class="stats">
@@ -421,8 +530,8 @@ function viewOverview(r) {
       ${cards.length ? `
         <div class="bar"><i class="k" style="width:${(know / cards.length) * 100}%"></i><i class="l" style="width:${(learning / cards.length) * 100}%"></i></div>
         <div class="row wrap small">
-          <span class="badge good">✓ Know it: ${know}</span>
-          <span class="badge warn">↻ Still learning: ${learning}</span>
+          <span class="badge good">${icon('check')}Know it: ${know}</span>
+          <span class="badge warn">${icon('rotate')}Still learning: ${learning}</span>
           <span class="badge">Not marked: ${unmarked}</span>
         </div>` : `<p class="muted">No flashcards yet.</p>`}
     </div>
@@ -442,7 +551,7 @@ function viewHistory(r) {
   const at = attemptsOf(r.id);
   render(`${topbar(`History · ${esc(r.title)}`, `/r/${r.id}`)}
     <main class="container stack">
-      ${at.length ? at.map(attemptRow).join('') : `<div class="empty"><span class="emoji">🕓</span>No attempts yet.</div>`}
+      ${at.length ? at.map(attemptRow).join('') : `<div class="empty"><span class="empty-ic">${icon('clock')}</span>No attempts yet.</div>`}
       ${at.length ? `<button class="btn danger block" data-act="clear-history" data-id="${r.id}">Clear history</button>` : ''}
     </main>`);
 }
@@ -480,9 +589,9 @@ function viewQuestions(r) {
         </div>
         <div class="clamp2" style="margin-top:10px;font-weight:650;white-space:pre-wrap">${esc(q.text)}</div>
         <div class="small muted ellip" style="margin-top:4px">Answer: ${esc(correctText(q))}</div>
-      </div>`).join('') : `<div class="empty"><span class="emoji">📝</span><h2>No questions yet</h2><p>Tap the button below to add your first one.</p></div>`}
+      </div>`).join('') : `<div class="empty"><span class="empty-ic">${icon('file-text')}</span><h2>No questions yet</h2><p>Tap the button below to add your first one.</p></div>`}
     </main>
-    <button class="fab" data-act="new-question" data-rid="${r.id}">+ Question</button>`);
+    <button class="fab" data-act="new-question" data-rid="${r.id}">${icon('plus')}Question</button>`);
 }
 
 let qForm = null; // { rid, id, type }
@@ -545,7 +654,7 @@ function saveQuestion(more) {
   }
   save('questions', q);
   touchReviewer(qForm.rid);
-  toast('Question saved ✓');
+  toast('Question saved');
   if (more) return questionForm(qForm.rid, null), route();
   closeModal();
   route();
@@ -572,7 +681,7 @@ function viewQuizSetup(r) {
       <div class="card">
         ${toggleRow('o-shufq', 'Shuffle questions', 'Random order each time', s.shuffleQ)}
         ${toggleRow('o-shufc', 'Shuffle choices', 'Mixes up multiple-choice options', s.shuffleC)}
-        ${toggleRow('o-lives', 'Life system ❤️❤️❤️', 'Lose a heart on each wrong answer. Lose all 3 and it is Game Over.', s.lives)}
+        ${toggleRow('o-lives', LIFE_TITLE, 'Lose a heart on each wrong answer. Lose all 3 and it is Game Over.', s.lives)}
       </div>
       <button class="btn primary block big" data-act="begin" data-mode="quiz" data-id="${r.id}">Start Quiz</button>
     </main>`);
@@ -593,7 +702,7 @@ function viewExamSetup(r) {
       </div>
       <div class="card">
         ${toggleRow('o-shuf', 'Shuffle questions &amp; choices', 'Turn off to take the first questions in order', s.shuffle)}
-        ${toggleRow('o-lives', 'Life system ❤️❤️❤️', 'Lose a heart on each wrong answer. Lose all 3 and the exam ends.', s.lives)}
+        ${toggleRow('o-lives', LIFE_TITLE, 'Lose a heart on each wrong answer. Lose all 3 and the exam ends.', s.lives)}
       </div>
       <button class="btn primary block big" data-act="begin" data-mode="exam" data-id="${r.id}">Start Exam</button>
     </main>`);
@@ -634,9 +743,9 @@ function renderPlay() {
   if (s.finished) return renderResults();
   const exam = s.mode === 'exam';
   render(`<header class="topbar">
-      <button class="btn ghost icon" data-act="quit" aria-label="Quit">✕</button>
+      <button class="btn ghost icon" data-act="quit" aria-label="Quit">${icon('x')}</button>
       ${s.livesOn
-        ? `<div class="hearts" id="hearts" aria-label="${s.lives} lives left">${Array.from({ length: MAX_LIVES }, (_, i) => `<span class="heart ${i >= s.lives ? 'lost' : ''}" data-h="${i}">❤️</span>`).join('')}</div>`
+        ? `<div class="hearts" id="hearts" aria-label="${s.lives} lives left">${Array.from({ length: MAX_LIVES }, (_, i) => `<span class="heart ${i >= s.lives ? 'lost' : ''}" data-h="${i}">${icon('heart', 'fill')}</span>`).join('')}</div>`
         : `<span class="badge">Lives off</span>`}
       <div class="grow center small muted" id="pcount"></div>
       ${exam ? `<div class="timer" id="timer">${fmtClock(s.endAt - Date.now())}</div>` : ''}
@@ -669,6 +778,8 @@ function renderQuestion() {
   const it = s.items[s.index];
   const q = it.q;
   const quiz = s.mode === 'quiz';
+  const enter = s.shown !== s.index;
+  s.shown = s.index;
   $('#pcount').textContent = `Question ${s.index + 1} of ${s.items.length}`;
   $('#pbar').style.width = `${(s.index / s.items.length) * 100}%`;
 
@@ -680,8 +791,8 @@ function renderQuestion() {
         if (quiz) cls = c.correct ? 'correct' : (i === it.user ? 'wrong' : '');
         else cls = i === it.user ? 'selected' : '';
       }
-      return `<button class="option ${cls}" data-act="pick" data-i="${i}" ${it.answered ? 'disabled' : ''}>
-        <span class="letter">${q.type === 'tf' ? (i ? '✗' : '✓') : 'ABCD'[i]}</span><span class="txt">${esc(c.text)}</span></button>`;
+      return `<button class="option ${cls}" style="--i:${i}" data-act="pick" data-i="${i}" ${it.answered ? 'disabled' : ''}>
+        <span class="letter">${q.type === 'tf' ? icon(i ? 'x' : 'check') : 'ABCD'[i]}</span><span class="txt">${esc(c.text)}</span></button>`;
     }).join('')}</div>`;
   } else {
     inner = `<div style="margin-top:16px">
@@ -694,17 +805,17 @@ function renderQuestion() {
   let feedback = '';
   if (it.answered && quiz) {
     feedback = `<div class="feedback ${it.correct ? 'good' : 'bad'}">
-      ${it.correct ? '✅ Correct!' : '❌ Wrong'}
+      <div class="fb-title">${it.correct ? `${icon('check-circle')}Correct!` : `${icon('x-circle')}Wrong`}</div>
       ${it.correct ? '' : `<div class="ans">Correct answer: ${esc(correctText(q))}</div>`}
     </div>`;
   }
   const last = s.index + 1 >= s.items.length;
   const dead = s.livesOn && s.lives <= 0;
   const next = it.answered && quiz
-    ? `<button class="btn primary block big" data-act="next">${dead ? 'Continue' : last ? 'See results' : 'Next question →'}</button>` : '';
+    ? `<button class="btn primary block big" data-act="next">${dead ? 'Continue' : last ? 'See results' : 'Next question'}${icon('arrow-right')}</button>` : '';
 
   $('#play-body').innerHTML = `<div class="stack">
-    <div class="card q-card ${it.answered && quiz && !it.correct ? 'shake' : ''}">
+    <div class="card q-card ${enter ? 'q-enter' : ''} ${it.answered && quiz && !it.correct ? 'shake' : ''}">
       <span class="badge">${TYPE_LABEL[q.type]}</span>
       <div class="q-text" style="margin-top:10px">${esc(q.text)}</div>
       ${inner}
@@ -728,7 +839,7 @@ function submitAnswer(value) {
     if (s.livesOn) {
       s.lives--;
       const h = $(`#hearts [data-h="${s.lives}"]`);
-      if (h) { h.classList.add('lost', 'lose-anim'); }
+      if (h) { h.classList.add('lost', 'lose-anim'); heartBurst(h); }
     }
   }
   renderQuestion();
@@ -771,10 +882,10 @@ function renderResults() {
   const total = s.items.length;
   const pct = Math.round((s.correct / total) * 100);
   const over = s.endReason === 'over';
-  const emoji = over ? '💀' : pct >= 90 ? '🏆' : pct >= 70 ? '🎉' : pct >= 50 ? '👍' : '💪';
+  const heroIc = over ? 'skull' : pct >= 90 ? 'trophy' : pct >= 70 ? 'award' : pct >= 50 ? 'thumbs-up' : 'zap';
   const title = over ? 'Game Over' : s.endReason === 'timeup' ? "Time's up!" : 'Completed!';
   const livesLine = !s.livesOn ? 'Life system was off'
-    : over ? 'You lost all 3 ❤️' : `Finished with ${s.lives} ❤️ left`;
+    : over ? `You lost all 3 ${icon('heart', 'fill heart-ic')}` : `Finished with ${s.lives} ${icon('heart', 'fill heart-ic')} left`;
 
   const review = s.items.map((it, i) => {
     const q = it.q;
@@ -791,7 +902,7 @@ function renderResults() {
   render(`${topbar(s.mode === 'exam' ? 'Exam results' : 'Quiz results', '')}
     <main class="container stack">
       <div class="card result-hero ${over ? 'over' : ''}">
-        <span class="emoji">${emoji}</span>
+        <span class="hero-ic">${icon(heroIc)}</span>
         <h2 style="margin-top:8px">${title}</h2>
         <div class="big-score">${s.correct} / ${total}</div>
         <div class="muted" style="font-size:1.1rem;font-weight:700">${pct}%</div>
@@ -806,6 +917,7 @@ function renderResults() {
       <div class="section-title">Review</div>
       <div class="stack">${review}</div>
     </main>`);
+  if (!over && pct >= 70) confetti();
 }
 
 /* =====================================================================
@@ -822,8 +934,8 @@ function viewCards(r) {
   render(`${topbar('Flashcards', `/r/${r.id}`, `<span class="badge">${cards.length}</span>`)}
     <main class="container stack">
       <div class="btn-grid">
-        <button class="btn primary" data-act="nav" data-to="/r/${r.id}/study" ${cards.length ? '' : 'disabled'}>🃏 Study</button>
-        <button class="btn" data-act="generate-cards" data-id="${r.id}" ${nq ? '' : 'disabled'}>✨ From questions</button>
+        <button class="btn primary" data-act="nav" data-to="/r/${r.id}/study" ${cards.length ? '' : 'disabled'}>${icon('layers')}Study</button>
+        <button class="btn" data-act="generate-cards" data-id="${r.id}" ${nq ? '' : 'disabled'}>${icon('sparkles')}From questions</button>
       </div>
       ${cards.length ? `<button class="btn danger block sm" data-act="reset-progress" data-id="${r.id}">Reset “Know it” progress</button>` : ''}
       ${cards.length ? cards.map((c) => `<div class="card">
@@ -836,10 +948,10 @@ function viewCards(r) {
         </div>
         <div class="clamp2" style="margin-top:10px;font-weight:650;white-space:pre-wrap">${esc(c.front)}</div>
         <div class="clamp2 small muted" style="white-space:pre-wrap">${esc(c.back)}</div>
-      </div>`).join('') : `<div class="empty"><span class="emoji">🃏</span><h2>No flashcards yet</h2>
+      </div>`).join('') : `<div class="empty"><span class="empty-ic">${icon('layers')}</span><h2>No flashcards yet</h2>
         <p>${nq ? 'Tap “From questions” to auto-make a deck, or add your own.' : 'Add your own cards with the button below.'}</p></div>`}
     </main>
-    <button class="fab" data-act="new-card" data-rid="${r.id}">+ Card</button>`);
+    <button class="fab" data-act="new-card" data-rid="${r.id}">${icon('plus')}Card</button>`);
 }
 function cardForm(rid, c) {
   openModal(`<h2>${c ? 'Edit flashcard' : 'New flashcard'}</h2>
@@ -860,7 +972,7 @@ function generateCards(rid) {
     save('flashcards', { id: uid(), reviewerId: rid, front: q.text, back: correctText(q), status: 'new', questionId: q.id, created: Date.now() + i });
     added++;
   });
-  toast(added ? `Added ${plural(added, 'flashcard')} ✓` : 'All questions already have flashcards.');
+  toast(added ? `Added ${plural(added, 'flashcard')}` : 'All questions already have flashcards.');
   route();
 }
 
@@ -882,22 +994,22 @@ function viewStudy(r) {
 function renderStudy() {
   const st = study;
   const r = getReviewer(st.rid);
-  const head = topbar(`🃏 ${esc(r.title)}`, `/r/${r.id}`);
+  const head = topbar(`${esc(r.title)}`, `/r/${r.id}`);
   const opts = `<div class="row wrap" style="gap:8px">
-      <button class="btn sm ${st.shuffle ? 'primary' : ''}" data-act="study-opt" data-o="shuffle">🔀 Shuffle ${st.shuffle ? 'on' : 'off'}</button>
-      <button class="btn sm ${st.onlyLearning ? 'primary' : ''}" data-act="study-opt" data-o="onlyLearning">↻ Still learning only</button>
+      <button class="btn sm ${st.shuffle ? 'primary' : ''}" data-act="study-opt" data-o="shuffle">${icon('shuffle')}Shuffle ${st.shuffle ? 'on' : 'off'}</button>
+      <button class="btn sm ${st.onlyLearning ? 'primary' : ''}" data-act="study-opt" data-o="onlyLearning">${icon('rotate')}Still learning only</button>
     </div>`;
 
   if (!st.deck.length) {
     return render(`${head}<main class="container stack">${opts}
-      <div class="empty"><span class="emoji">🎉</span><h2>Nothing left to study</h2><p>You marked every card “Know it”. Turn off “Still learning only” to see them all.</p></div></main>`);
+      <div class="empty"><span class="empty-ic">${icon('award')}</span><h2>Nothing left to study</h2><p>You marked every card “Know it”. Turn off “Still learning only” to see them all.</p></div></main>`);
   }
   if (st.i >= st.deck.length) {
     const ids = new Set(st.deck);
     const cs = data.flashcards.filter((c) => ids.has(c.id));
     const know = cs.filter((c) => c.status === 'know').length;
     return render(`${head}<main class="container stack">
-      <div class="card result-hero"><span class="emoji">🎉</span><h2 style="margin-top:8px">Deck finished!</h2>
+      <div class="card result-hero"><span class="hero-ic">${icon('award')}</span><h2 style="margin-top:8px">Deck finished!</h2>
         <p style="margin-top:10px"><span class="badge good">Know it: ${know}</span> <span class="badge warn">Still learning: ${cs.length - know}</span></p></div>
       <div class="btn-grid">
         <button class="btn primary big" data-act="study-restart">Restart deck</button>
@@ -908,7 +1020,7 @@ function renderStudy() {
   st.flipped = false;
   render(`${head}<main class="container stack">
     ${opts}
-    <div class="row between small muted"><b id="st-count" style="color:var(--text)">Card ${st.i + 1} of ${st.deck.length}</b><span>Tap card to flip · swipe ← →</span></div>
+    <div class="row between small muted"><b id="st-count" style="color:var(--text)">Card ${st.i + 1} of ${st.deck.length}</b><span>Tap card to flip · swipe left or right</span></div>
     <div class="progress-line"><i id="st-bar" style="width:${(st.i / st.deck.length) * 100}%"></i></div>
     <div class="fc-wrap" id="fc-wrap">
       <div class="fc" id="fc" data-act="flip" tabindex="0" role="button" aria-label="Flashcard. Activate to flip.">
@@ -917,12 +1029,12 @@ function renderStudy() {
       </div>
     </div>
     <div class="btn-grid">
-      <button class="btn warn big" style="border-color:var(--warn);color:var(--warn)" data-act="mark" data-s="learning">↻ Still learning</button>
-      <button class="btn good big" data-act="mark" data-s="know">✓ Know it</button>
+      <button class="btn warn-btn big" data-act="mark" data-s="learning">${icon('rotate')}Still learning</button>
+      <button class="btn good big" data-act="mark" data-s="know">${icon('check')}Know it</button>
     </div>
     <div class="row">
-      <button class="btn grow" data-act="card-prev" ${st.i === 0 ? 'disabled' : ''} id="st-prev">← Previous</button>
-      <button class="btn grow" data-act="card-next" id="st-next">Next →</button>
+      <button class="btn grow" data-act="card-prev" ${st.i === 0 ? 'disabled' : ''} id="st-prev">${icon('arrow-left')}Previous</button>
+      <button class="btn grow" data-act="card-next" id="st-next">Next${icon('arrow-right')}</button>
     </div>
   </main>`);
   fillCard(c);
@@ -953,9 +1065,10 @@ function gotoCard(i, dir) {
     $('#st-count').textContent = `Card ${i + 1} of ${st.deck.length}`;
     $('#st-bar').style.width = `${(i / st.deck.length) * 100}%`;
     $('#st-prev').disabled = i === 0;
-    fc.classList.remove('slide-left', 'slide-right');
-    void fc.offsetWidth;
-    fc.classList.add(dir < 0 ? 'slide-right' : 'slide-left');
+    const wrap = $('#fc-wrap');
+    wrap.classList.remove('slide-left', 'slide-right');
+    void wrap.offsetWidth;
+    wrap.classList.add(dir < 0 ? 'slide-right' : 'slide-left');
   };
   if (st.flipped) {
     // flip back first so the next answer is never visible mid-animation
@@ -990,8 +1103,8 @@ function viewData() {
       <div class="card stack">
         <div class="card-title">Backup file</div>
         <p class="muted small">Without cloud sync, your data is saved only on this device. Export a file, send it to another device (AirDrop, email, Files), then import it there.</p>
-        <button class="btn primary block" data-act="export">⬇️ Export all data</button>
-        <button class="btn block" data-act="import">⬆️ Import from file</button>
+        <button class="btn primary block" data-act="export">${icon('download')}Export all data</button>
+        <button class="btn block" data-act="import">${icon('upload')}Import from file</button>
         <input type="file" id="import-file" accept="application/json,.json" class="hidden">
       </div>
       <div class="card">
@@ -1010,7 +1123,7 @@ async function exportData() {
   const file = new File([json], name, { type: 'application/json' });
   // On phones, the share sheet is the most reliable way to save a file (esp. iOS home-screen apps)
   if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) && navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'Cramview backup' }); return toast('Backup ready ✓'); }
+    try { await navigator.share({ files: [file], title: 'Cramview backup' }); return toast('Backup ready'); }
     catch (e) { if (e.name === 'AbortError') return; }
   }
   const url = URL.createObjectURL(file);
@@ -1018,7 +1131,7 @@ async function exportData() {
   a.href = url; a.download = name;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
-  toast('Backup downloaded ✓');
+  toast('Backup downloaded');
 }
 function parseImport(text) {
   const obj = JSON.parse(text);
@@ -1056,7 +1169,7 @@ async function importFile(file) {
       });
     }
     persistAll();
-    toast('Import complete ✓');
+    toast('Import complete');
     go('/');
     route();
   });
@@ -1069,7 +1182,9 @@ async function importFile(file) {
 const MAX_FILE_MB = 50;
 const fileIcon = (name) => {
   const ext = (name.split('.').pop() || '').toLowerCase();
-  return { pdf: '📕', ppt: '📙', pptx: '📙', doc: '📘', docx: '📘', xls: '📗', xlsx: '📗', txt: '📄', md: '📄' }[ext] || (/^(png|jpe?g|gif|webp|heic)$/.test(ext) ? '🖼️' : '📎');
+  const kind = { pdf: 'pdf', ppt: 'ppt', pptx: 'ppt', doc: 'doc', docx: 'doc', xls: 'xls', xlsx: 'xls', csv: 'xls' }[ext]
+    || (/^(png|jpe?g|gif|webp|heic)$/.test(ext) ? 'img' : '');
+  return `<span class="file-ic ${kind}">${icon(kind === 'img' ? 'image' : 'file')}</span>`;
 };
 const fmtSize = (b) => (b < 1024 * 1024 ? `${Math.max(1, Math.round(b / 1024))} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`);
 let fileUrls = [];
@@ -1115,13 +1230,13 @@ async function renderFiles(rid) {
     const canExtract = /^(docx|pptx|txt|md)$/.test(ext);
     return `<div class="card">
       <div class="list-item">
-        <span style="font-size:1.8rem" aria-hidden="true">${fileIcon(f.name)}</span>
+        ${fileIcon(f.name)}
         <div class="grow"><div class="ellip" style="font-weight:650">${esc(f.name)}</div><div class="small muted">${fmtSize(f.size)}</div></div>
       </div>
       <div class="row wrap" style="margin-top:10px;gap:8px">
         ${canOpen ? `<a class="btn sm" href="${url}" target="_blank" rel="noopener">Open</a>` : ''}
         <a class="btn sm" href="${url}" download="${esc(f.name)}">Download</a>
-        ${canExtract ? `<button class="btn sm" data-act="file-extract" data-id="${f.id}">Text → notes</button>` : ''}
+        ${canExtract ? `<button class="btn sm" data-act="file-extract" data-id="${f.id}">Text to notes</button>` : ''}
         <button class="btn sm danger" data-act="file-delete" data-id="${f.id}">Delete</button>
       </div>
     </div>`;
@@ -1139,7 +1254,7 @@ async function addFiles(fileList, rid) {
       added++;
     } catch (e) { writeFailed(e); break; }
   }
-  if (added) toast(`Added ${plural(added, 'file')} ✓`);
+  if (added) toast(`Added ${plural(added, 'file')}`);
   renderFiles(rid);
 }
 
@@ -1233,7 +1348,7 @@ async function extractToNotes(fileId) {
     r.notes = `${r.notes ? `${r.notes}\n\n` : ''}— ${rec.name} —\n${text}`;
     r.updated = now();
     save('reviewers', r);
-    toast('Added to notes ✓');
+    toast('Added to notes');
     route();
   });
 }
@@ -1259,7 +1374,7 @@ function loadSample() {
   ];
   Q.forEach((q, i) => save('questions', { id: uid(), reviewerId: rid, created: t + i, ...q }));
   generateCards(rid);
-  toast('Sample reviewer added ✓');
+  toast('Sample reviewer added');
   route();
 }
 
@@ -1280,7 +1395,7 @@ const ACTIONS = {
     const r = { id: old?.id || uid(), title, subject: $('#f-subject').value.trim(), notes: $('#f-notes').value.trim(), created: old?.created || now(), updated: now() };
     save('reviewers', r);
     closeModal();
-    toast('Saved ✓');
+    toast('Saved');
     if (old) route(); else go(`/r/${r.id}`);
   },
   'delete-reviewer': async (el) => {
@@ -1367,7 +1482,7 @@ const ACTIONS = {
     if (!front || !back) return toast('Please fill in both sides.');
     const old = el.dataset.id ? data.flashcards.find((c) => c.id === el.dataset.id) : null;
     save('flashcards', { id: old?.id || uid(), reviewerId: old?.reviewerId || el.dataset.rid, front, back, status: old?.status || 'new', questionId: old?.questionId, created: old?.created || Date.now() });
-    toast('Card saved ✓');
+    toast('Card saved');
     if (el.dataset.more === '1') { cardForm(el.dataset.rid, null); route(); return; }
     closeModal();
     route();
@@ -1615,7 +1730,7 @@ async function runSync(manual) {
     await pushLocal();
     syncMeta.last = Date.now();
     saveMeta();
-    if (manual) toast('Synced ✓');
+    if (manual) toast('Synced');
   } catch (e) {
     sync.error = e.message || 'Sync failed';
     if (manual) toast(`Sync failed: ${sync.error}`);
@@ -1637,7 +1752,7 @@ function refreshAfterSync() {
 }
 function syncStatusText() {
   if (sync.running) return 'Syncing…';
-  if (sync.error) return `⚠️ ${esc(sync.error)}`;
+  if (sync.error) return `${icon('alert')} ${esc(sync.error)}`;
   return syncMeta.last ? `Last synced ${esc(fmtDate(new Date(syncMeta.last).toISOString()))}` : 'Not synced yet';
 }
 function updateSyncUI() {
@@ -1646,18 +1761,18 @@ function updateSyncUI() {
 }
 function syncCard() {
   if (!syncConfigured) {
-    return `<div class="card stack"><div class="card-title">☁️ Cloud sync</div>
+    return `<div class="card stack"><div class="card-title">${icon('cloud')}Cloud sync</div>
       <p class="muted small">Cloud sync isn’t set up yet. Add your Supabase project URL and anon key to <b>config.js</b> (see README), then reload.</p></div>`;
   }
   if (auth) {
-    return `<div class="card stack"><div class="card-title">☁️ Cloud sync</div>
+    return `<div class="card stack"><div class="card-title">${icon('cloud')}Cloud sync</div>
       <p class="small">Signed in as <b>${esc(auth.user.email)}</b></p>
       <p class="muted small" id="sync-status">${syncStatusText()}</p>
       <div class="btn-grid"><button class="btn primary" data-act="sync-now">Sync now</button>
       <button class="btn" data-act="sign-out">Sign out</button></div>
       <p class="muted small">Changes sync automatically when you’re online. Sign out keeps the data on this device.</p></div>`;
   }
-  return `<div class="card stack"><div class="card-title">☁️ Cloud sync</div>
+  return `<div class="card stack"><div class="card-title">${icon('cloud')}Cloud sync</div>
     <p class="muted small">Sign in to keep your reviewers in sync between your PC and iPhone. The app still works offline.</p>
     <label class="field"><span class="label">Email</span><input type="email" id="a-email" autocomplete="email" autocapitalize="none" inputmode="email"></label>
     <label class="field"><span class="label">Password (6+ characters)</span><input type="password" id="a-pass" autocomplete="current-password"></label>
@@ -1682,7 +1797,7 @@ async function doAuth(create) {
       await signIn(email, password);
     }
     if (!await afterLogin()) return viewData();
-    toast('Signed in ✓');
+    toast('Signed in');
     viewData();
     runSync(true);
   } catch (e) {
