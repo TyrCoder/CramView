@@ -131,23 +131,50 @@ REMOVE everything that is not lesson content: the reviewer, course or subject ti
 
 FORMAT (plain text): each topic starts on its own short heading line (no bullet). Under it write the content as short lines: a definition as "Term: meaning", a list item as "• item", and an ordinary explanation as a complete sentence. Keep related items together under their heading and leave a blank line between topics. If the text has no lesson content at all, reply with exactly: NO_LESSON_CONTENT`;
 
-/** Call Groq. Qwen3 "thinks" by default, which is slow and eats the rate limit, so ask it not to (and retry without if the model rejects that). */
-async function askGroq(apiKey: string, messages: unknown[], opts: { json: boolean; temperature: number; maxTokens: number }) {
-  const model = Deno.env.get('GROQ_MODEL') || DEFAULT_MODEL;
-  const build = (reasoning: boolean) => JSON.stringify({
+/** Extra models to try, in order, if the chosen one isn't available (Groq retires models now and then). */
+const BACKUP_MODELS = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
+/** Does this Groq error mean "that model isn't available"? */
+export function isModelUnavailable(status: number, text: string) {
+  return status === 404 || ([400, 403].includes(status) && !/reasoning|response_format|json/i.test(text) && /model/i.test(text) && /(decommission|not found|does not exist|no longer supported|blocked|do not have access|permission)/i.test(text));
+}
+/** Keep a model's hidden "thinking" short: Qwen can switch it off, gpt-oss can only lower it. */
+const reasoningFor = (model: string) => (/qwen/i.test(model) ? 'none' : /gpt-oss/i.test(model) ? 'low' : null);
+
+/** One request to one model; retries without settings the model rejects (reasoning effort, JSON mode). */
+async function askModel(apiKey: string, model: string, messages: unknown[], opts: { json: boolean; temperature: number; maxTokens: number }) {
+  const effort = reasoningFor(model);
+  const flags = { reasoning: !!effort, json: opts.json };
+  const build = () => JSON.stringify({
     model,
     temperature: opts.temperature,
-    max_tokens: opts.maxTokens,
+    max_tokens: opts.maxTokens + (/gpt-oss/i.test(model) ? 2000 : 0), // reasoning models spend some of this on thinking
     messages,
-    ...(opts.json ? { response_format: { type: 'json_object' } } : {}),
-    ...(reasoning && /qwen/i.test(model) ? { reasoning_effort: 'none' } : {}),
+    ...(flags.json ? { response_format: { type: 'json_object' } } : {}),
+    ...(flags.reasoning ? { reasoning_effort: effort } : {}),
   });
-  const post = (body: string) => fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body,
-  });
-  let res = await post(build(true));
-  if (res.status === 400 && /reasoning/i.test(await res.clone().text())) res = await post(build(false));
+  let res!: Response;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: build(),
+    });
+    if (res.status !== 400) break;
+    const text = await res.clone().text();
+    if (isModelUnavailable(400, text)) break;
+    if (flags.reasoning && /reasoning/i.test(text)) flags.reasoning = false;
+    else if (flags.json && /response_format|json/i.test(text)) flags.json = false;
+    else break;
+  }
   return res;
+}
+/** Try the chosen model (GROQ_MODEL or the default), then the backups, until one is available. */
+async function askGroq(apiKey: string, messages: unknown[], opts: { json: boolean; temperature: number; maxTokens: number }) {
+  const primary = Deno.env.get('GROQ_MODEL') || DEFAULT_MODEL;
+  let last!: Response;
+  for (const model of [primary, ...BACKUP_MODELS.filter((m) => m !== primary)]) {
+    last = await askModel(apiKey, model, messages, opts);
+    if (last.ok || !isModelUnavailable(last.status, await last.clone().text())) return last;
+  }
+  return last; // every model was unavailable
 }
 
 Deno.serve(async (req: Request) => {
@@ -196,7 +223,9 @@ Deno.serve(async (req: Request) => {
     const retryAfter = Number(res.headers.get('retry-after')) || undefined;
     return json({ error: 'The AI is busy right now. Try again in a minute.', retryAfter }, 429);
   }
-  if (res.status === 404) return json({ error: 'Groq doesn’t offer the configured model. Set the GROQ_MODEL secret to a current Groq model name.' }, 502);
+  if (!res.ok && isModelUnavailable(res.status, await res.clone().text())) {
+    return json({ error: 'Groq doesn’t offer any of the models we tried. Set the GROQ_MODEL secret to a current Groq model name.' }, 502);
+  }
   if (!res.ok) return json({ error: `The AI service returned an error (${res.status}).` }, 502);
 
   let content = '';
